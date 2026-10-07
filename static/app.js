@@ -26,7 +26,7 @@ const paths = {
 };
 const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.book}</svg>`;
 function hydrateIcons(root = document) { $$('[data-icon]', root).forEach(el => el.innerHTML = icon(el.dataset.icon)); }
-let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer, drillTimer, audioSequence = 0, answerBusy = false, drillMatches = [], drillHighlight = 0;
+let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer, drillTimer, audioSequence = 0, answerBusy = false, drillMatches = [], drillHighlight = 0, preparedPreviewText = null;
 const token = $('meta[name="typewriter-token"]').content;
 
 async function api(path, method = 'GET', data) {
@@ -45,7 +45,7 @@ function toast(message, error = false) {
 async function guarded(action, button) {
   if (button) button.disabled = true;
   try { return await action(); } catch (error) { toast(error.message || 'Please try again.', true); }
-  finally { if (button) button.disabled = !!(state?.enrichment.busy && ['prepare-all','prepare-selected'].includes(button.dataset.action)); }
+  finally { if (button) button.disabled = button.id === 'apply-preparation' ? !preparedPreviewText : !!(state?.enrichment.busy && state.settings.preparation_method === 'api' && ['prepare-all','prepare-selected'].includes(button.dataset.action)); }
 }
 async function refresh() {
   const previousJob = state?.enrichment;
@@ -72,7 +72,7 @@ function badge(word) {
   return `<span class="badge ${type}">${escapeHtml(word.state)}</span>`;
 }
 function dueWords() {
-  return state.words.filter(w => w.is_due).sort((a,b) => (a.accuracy ?? 50) - (b.accuracy ?? 50) || a.due.localeCompare(b.due));
+  return state.words.filter(w => w.is_due && exerciseTypes(w).length).sort((a,b) => (a.accuracy ?? 50) - (b.accuracy ?? 50) || a.due.localeCompare(b.due));
 }
 function stat(label, value, note, symbol) {
   return `<div class="stat"><span class="stat-label">${label}</span><span class="icon-tile">${icon(symbol)}</span><div class="stat-value">${value}</div><span class="stat-note">${note}</span></div>`;
@@ -109,18 +109,18 @@ function renderLibrary() {
   renderPracticeModes();
 }
 function renderQueue() {
-  const job = state.enrichment;
-  const message = job.busy || job.total ? job.message : job.pending ? `${job.pending} words waiting to be prepared` : 'Your words are ready when you are.';
-  const detail = job.error || (job.busy ? 'You can keep practising while this runs.' : job.pending ? `${job.pending} words queued. Prepare a set now, or wait for an automatic batch of ${state.settings.batch_size}.` : 'Meanings, sentences, and tips can always be edited.');
-  const content = `${icon('spark')}<div><span>${escapeHtml(message)}</span><p>${escapeHtml(detail)}</p></div>${job.pending ? `<button class="text-button" data-action="prepare-all" ${job.busy ? 'disabled' : ''}>Prepare now${icon('arrow')}</button>` : ''}`;
+  const job = state.enrichment, usesApi = state.settings.preparation_method === 'api';
+  const message = job.busy || usesApi && job.total ? job.message : job.pending ? `${job.pending} words waiting to be prepared` : 'Your words are ready when you are.';
+  const detail = (usesApi || job.busy ? job.error : '') || (job.busy ? 'You can keep practising while this runs.' : job.pending ? state.settings.preparation_method === 'offline' ? `${job.pending} words queued for prompt export. No API calls are enabled.` : state.settings.preparation_method === 'manual' ? `${job.pending} words need material. Add definitions, sentences, and tips in the word editor.` : `${job.pending} words queued. Prepare a set now, or wait for an automatic batch of ${state.settings.batch_size}.` : 'Meanings, sentences, and tips can always be edited.');
+  const content = `${icon('spark')}<div><span>${escapeHtml(message)}</span><p>${escapeHtml(detail)}</p></div>${job.pending && state.settings.preparation_method !== 'manual' ? `<button class="text-button" data-action="prepare-all" ${job.busy ? 'disabled' : ''}>${state.settings.preparation_method === 'offline' ? 'Export prompts' : 'Prepare now'}${icon('arrow')}</button>` : ''}`;
   for (const el of [$('#queue-banner'), $('#today-preparation')]) {
     el.classList.toggle('busy', job.busy);
-    el.classList.toggle('failed', !!job.error);
+    el.classList.toggle('failed', !!job.error && (usesApi || job.busy));
     el.innerHTML = content;
   }
-  $('#today-preparation').hidden = !job.busy && !job.error && !job.total;
-  $('#settings-pending').textContent = `${job.message}${job.error ? ' ' + job.error : ''}`;
-  $$('[data-action="prepare-all"], [data-action="prepare-selected"]').forEach(b => b.disabled = job.busy || !job.pending);
+  $('#today-preparation').hidden = !job.busy && (!usesApi || !job.error && !job.total);
+  $('#settings-pending').textContent = usesApi || job.busy ? `${job.message}${job.error ? ' ' + job.error : ''}` : `${job.pending} words need material · ${usesApi ? 'Gemini API' : state.settings.preparation_method === 'offline' ? 'prompt export/import' : 'manual entry'}`;
+  $$('[data-action="prepare-all"], [data-action="prepare-selected"]').forEach(b => {b.disabled = (job.busy && state.settings.preparation_method === 'api') || !job.pending;b.hidden = state.settings.preparation_method === 'manual';});
   $('#app-log').innerHTML = state.logs.length ? state.logs.map(r => `<div class="log-entry ${escapeHtml(r.level)}"><time>${escapeHtml(new Date(r.created).toLocaleString())}</time><span>${escapeHtml(r.message)}</span></div>`).join('') : '<p class="muted small">No events yet. Preparation results will appear here.</p>';
 }
 function renderPracticeModes() {
@@ -130,6 +130,7 @@ function renderPracticeModes() {
 }
 function renderProgress() {
   const p = state.progress;
+  $('#meaning-progress').textContent = p.meanings ? `${p.meanings} meaning quizzes · ${Math.round(100*p.meanings_correct/p.meanings)}% correct · separate from spelling recall` : 'Meaning quiz results will appear here, separate from spelling recall.';
   $('#progress-stats').innerHTML = stat('Unaided review attempts',p.reviews,'First answers, without revealed spelling','book') + stat('Correctly remembered',p.correct,'Progress you can build on','check') + stat('Drill repetitions',p.drills,'Focused practice, counted separately','keyboard');
   const days = Array.from({length:7},(_,i) => {const d = new Date(); d.setUTCDate(d.getUTCDate() - (6-i)); return d.toISOString().slice(0,10);});
   const maximum = Math.max(5,...p.history.map(d => d.total));
@@ -141,6 +142,7 @@ function fillSettings() {
   const form = $('#settings-form');
   Object.entries(state.settings).forEach(([key,value]) => {const field = form.elements.namedItem(key);if (!field) return;if (field.type === 'checkbox') field.checked = value;else field.value = value;});
   form.elements.clear_proxy_password.checked = false;
+  form.elements.auto_ai.disabled = state.settings.preparation_method !== 'api';
   $('#proxy-password-note').textContent = state.settings.proxy_password_set ? 'saved locally' : 'optional';
 }
 function renderKeys() {
@@ -150,14 +152,16 @@ function renderKeys() {
 }
 function settingsPayload() {
   const form = $('#settings-form'), result = {};
-  ['proxy_enabled','auto_ai','review_enabled','drill_enabled','clear_proxy_password'].forEach(k => result[k] = form.elements[k].checked);
-  ['proxy_type','proxy_host','proxy_username','proxy_password','model'].forEach(k => result[k] = form.elements[k].value.trim());
-  ['proxy_port','batch_size','daily_budget','requests_per_minute'].forEach(k => result[k] = Number(form.elements[k].value));
+  ['proxy_enabled','auto_ai','review_enabled','drill_enabled','sentence_enabled','definition_enabled','audio_enabled','meaning_enabled','clear_proxy_password'].forEach(k => result[k] = form.elements[k].checked);
+  ['proxy_type','proxy_host','proxy_username','proxy_password','model','preparation_method'].forEach(k => result[k] = form.elements[k].value.trim());
+  ['proxy_port','batch_size','daily_budget','requests_per_minute','offline_batch_size'].forEach(k => result[k] = Number(form.elements[k].value));
   return result;
 }
 async function saveSettings() {
   if (!$('#settings-form').reportValidity()) throw new Error('Please check the settings fields.');
+  const requestedModel = $('#settings-form').elements.model.value.trim();
   state.settings = await api('/settings','PUT',settingsPayload());
+  $('#model-note').textContent = requestedModel !== state.settings.model ? `Model name corrected to ${state.settings.model}.` : 'Availability is checked before generation. Refresh the list to see available models.';
   fillSettings();
 }
 function openWord(id = null) {
@@ -172,6 +176,9 @@ function openWord(id = null) {
   $('#word-dialog-title').textContent = id ? 'Make this word your own.' : 'A word worth remembering.';
   $('#word-submit').innerHTML = (id ? 'Save changes' : 'Add to notebook') + icon(id ? 'check' : 'plus');
   $('#word-save-note').innerHTML = id ? `<button type="button" class="text-button" data-action="delete-word">${icon('trash')}Remove word</button>` : 'Saved locally. Prepared at your pace.';
+  $('#word-audio-panel').hidden = !id;
+  if (id) renderWordAudio();
+  $('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();
   const form = $('#word-form');
   form.elements.word.readOnly = id !== null;
   if (id) {const word = state.words.find(w => w.id === id);['word','definition','sentence','tip','tag'].forEach(k => form.elements[k].value = word[k]);$('#word-provenance').textContent = ['definition','sentence','tip'].filter(k => word[k]).map(k => ({definition:'Meaning',sentence:'Sentence',tip:'Tip'})[k] + ': ' + (word.sources[k] || 'manual')).join(' · ');}
@@ -287,10 +294,12 @@ function acceptDrillWord() {
 }
 function startReview(ids) {
   if (!state.settings.review_enabled) return;
-  let words = ids ? state.words.filter(w => ids.includes(w.id)) : dueWords().slice(0,10);
+  let words = ids ? state.words.filter(w => ids.includes(w.id) && exerciseTypes(w).length) : dueWords().slice(0,10);
+  let cursor = 0;
+  words = words.map(w => {const types = exerciseTypes(w);const exercise = types[cursor++ % types.length];return {...w,exercise};});
   if (!words.length) {
     if (!state.words.length) {openWord();toast('Add some words, or try the starter collection.');}
-    else {toast('Your scheduled reviews are done. Choose words in My words for extra practice.');navigate('words');}
+    else {toast('No words are available for the enabled exercises. Add clues, check recordings, or choose other exercises in Settings.');navigate('words');}
     return;
   }
   practice = {mode:'review',queue:words,index:0,attempts:0,correct:0,hinted:false,feedback:false,correction:false,started:Date.now(),repetitions:0};
@@ -311,26 +320,56 @@ function openPractice() {
 }
 function currentWord() {return practice.queue[practice.mode === 'drill' ? 0 : practice.index];}
 function concealed(word, text) {return String(text || '').replace(new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'),'________');}
+function exerciseTypes(word) {
+  const types = [], settings = state.settings;
+  if (settings.sentence_enabled && word.clue) types.push('sentence');
+  if (settings.definition_enabled && word.definition) types.push('definition');
+  if (settings.audio_enabled && word.audio_eligible) types.push('audio');
+  if (settings.meaning_enabled && word.definition && state.words.some(w => w.definition && w.definition.trim().toLowerCase() !== word.definition.trim().toLowerCase())) types.push('meaning');
+  return types;
+}
+function makeMeaningChoices(word) {
+  const seen = new Set([word.definition.trim().toLowerCase()]);
+  const others = state.words.filter(w => {const key = w.definition.trim().toLowerCase();if (!key || seen.has(key)) return false;seen.add(key);return true;});
+  const shuffle = list => {for (let i=list.length-1;i>0;i--) {const j=Math.floor(Math.random()*(i+1));[list[i],list[j]]=[list[j],list[i]];}return list;};
+  return shuffle([word,...shuffle(others).slice(0,3)]);
+}
 function renderPractice() {
   clearTimeout(drillTimer);
   stopPronunciation();
-  const word = currentWord(), drill = practice.mode === 'drill';
-  practice.feedback = false; practice.hinted = false; practice.wordStarted = Date.now();
-  $('#practice-mode').textContent = drill ? 'WORD DRILL · FIND YOUR RHYTHM' : 'DAILY REVIEW · ONE WORD AT A TIME';
+  const word = currentWord(), drill = practice.mode === 'drill', meaning = !drill && word.exercise === 'meaning', audioOnly = !drill && word.exercise === 'audio' && !practice.correction;
+  practice.feedback = false; practice.hinted = false; practice.audioBlocked = false; practice.choice = null; practice.wordStarted = Date.now();
+  $('#practice-mode').textContent = drill ? 'WORD DRILL · FIND YOUR RHYTHM' : ({sentence:'SENTENCE SPELLING',definition:'SPELLING FROM A MEANING',audio:'AUDIO-ONLY SPELLING',meaning:'MEANING QUIZ'})[word.exercise];
   $('#practice-count').textContent = drill ? (practice.target ? `${practice.correct} OF ${practice.target} CORRECT REPETITIONS` : `${practice.correct} CORRECT REPETITIONS · YOUR OWN PACE`) : `WORD ${practice.index + 1} OF ${practice.queue.length}`;
   $('#practice-meter-fill').style.width = (drill ? (practice.target ? Math.min(100,100 * practice.correct / practice.target) : 0) : 100 * practice.index / practice.queue.length) + '%';
-  $('#practice-label').textContent = drill ? 'STAY WITH THIS WORD' : practice.correction ? 'A CHANCE TO PRACTISE THE CORRECTION' : 'WHAT’S THE MISSING WORD?';
-  $('#practice-word').textContent = drill && practice.show || practice.correction ? word.word : '';
-  $('#practice-clue').textContent = drill ? (practice.show ? '' : 'Listen, remember, and type.') : word.clue || 'Listen to the word, then type its spelling.';
-  $('#practice-meaning').textContent = concealed(word.word,word.definition) || (drill ? 'Type, check, repeat. Let yourself settle into a rhythm.' : 'No clue yet? Reveal the spelling to learn it first.');
-  $('#hint-button').hidden = drill || practice.correction;
+  $('#practice-label').textContent = drill ? 'STAY WITH THIS WORD' : practice.correction ? 'A CHANCE TO PRACTISE THE CORRECTION' : meaning ? 'WHAT DOES THIS WORD MEAN?' : audioOnly ? 'LISTEN AND TYPE' : word.exercise === 'sentence' ? 'WHAT’S THE MISSING WORD?' : 'WHICH WORD HAS THIS MEANING?';
+  $('#practice-word').textContent = drill && practice.show || practice.correction || meaning ? word.word : '';
+  $('#practice-clue').textContent = drill ? (practice.show ? '' : 'Listen, remember, and type.') : meaning ? 'Choose the meaning. Keys 1–4 work too.' : audioOnly ? 'Type the spelling you hear.' : word.exercise === 'sentence' ? word.clue : concealed(word.word,word.definition);
+  $('#practice-meaning').textContent = drill ? concealed(word.word,word.definition) : '';
+  $('#hint-button').hidden = drill || practice.correction || meaning;
   $('#practice-show-control').hidden = !drill;
   $('#practice-show').checked = !!practice.show;
+  $('[data-action="listen"]', $('#practice-dialog')).hidden = !!word.audio_flagged;
+  $('#practice-audio-flag').hidden = !!word.audio_flagged;
+  $('#skip-audio').hidden = !audioOnly;
+  $('#playback-status').textContent = '';
   $('#practice-feedback').innerHTML = '';
-  $('#answer').value = '';
-  $('#answer').disabled = false;
-  $('#answer-submit').innerHTML = 'Check spelling' + icon('arrow');
-  setTimeout(() => $('#answer').focus(),20);
+  $('#answer').value = '';$('#answer').disabled = false;$('#answer').hidden = meaning;
+  $('#meaning-options').hidden = !meaning;
+  if (meaning) {
+    practice.choices = makeMeaningChoices(word);
+    $('#meaning-options').innerHTML = practice.choices.map((w,i) => `<button type="button" class="meaning-choice" data-meaning-choice="${i}" aria-pressed="false"><span>${i+1}</span>${escapeHtml(w.definition)}</button>`).join('');
+  }
+  $('#answer-submit').innerHTML = (meaning ? 'Check meaning' : 'Check spelling') + icon('arrow');
+  // Start on the user's session/Next action, retaining browser playback permission.
+  if (audioOnly) guarded(() => listen(true));
+  setTimeout(() => {if ($('#practice-active').hidden) return;if (meaning) $('.meaning-choice')?.focus();else $('#answer').focus();},20);
+}
+function selectMeaning(index) {
+  if (!practice || practice.feedback || answerBusy || currentWord().exercise !== 'meaning' || !practice.choices[index]) return;
+  practice.choice = practice.choices[index].id;
+  $$('.meaning-choice').forEach((b,i) => {b.classList.toggle('selected',i===index);b.setAttribute('aria-pressed',String(i===index));});
+  $('#answer-submit').focus();
 }
 function letterDiff(expected, answer) {
   // Levenshtein alignment gives useful feedback for omissions and extra letters.
@@ -352,24 +391,27 @@ async function answerSubmit(event) {
   if (!practice || answerBusy || $('#practice-active').hidden) return;
   if (practice.feedback) {
     if (practice.mode === 'drill') {renderPractice();return;}
-    if (practice.lastCorrect) {practice.index++;practice.correction = false;if (practice.index >= practice.queue.length) finishPractice();else renderPractice();}
+    if (practice.lastCorrect || currentWord().exercise === 'meaning') {practice.index++;practice.correction = false;if (practice.index >= practice.queue.length) finishPractice();else renderPractice();}
     else {practice.correction = true;renderPractice();}
     return;
   }
-  const answer = $('#answer').value;
+  const meaning = practice.mode === 'review' && currentWord().exercise === 'meaning';
+  const answer = meaning ? String(practice.choice || '') : $('#answer').value;
+  if (meaning && !practice.choice) {toast('Choose a meaning, or press a number key.');return;}
   if (!answer.trim()) {$('#answer').focus();return;}
   answerBusy = true;
   const session = practice;
   await guarded(async () => {
     const word = currentWord();
-    const mode = practice.mode === 'drill' ? 'drill' : practice.correction ? 'correction' : 'review';
+    const mode = practice.mode === 'drill' ? 'drill' : practice.correction ? 'correction' : meaning ? 'meaning' : 'review';
     const result = await api(`/words/${word.id}/attempts`,'POST',{answer,mode,hinted:practice.hinted || practice.correction,elapsed_ms:Math.min(86400000,Date.now()-practice.wordStarted)});
     if (practice !== session || !$('#practice-dialog').open || $('#practice-active').hidden) return;
     practice.lastCorrect = result.correct; practice.feedback = true;
     if (mode !== 'correction') {practice.attempts++;if (result.correct) practice.correct++;}
     $('#answer').disabled = true;
-    $('#practice-feedback').innerHTML = result.correct ? `<div class="feedback-heading">${practice.hinted ? 'That’s right. Try recalling it unaided next time.' : practice.correction ? 'Nicely corrected. Keep that spelling in mind.' : 'That’s right. A little more familiar.'}</div>${result.tip ? `<span class="muted">${escapeHtml(result.tip)}</span>` : ''}` : `<div class="feedback-heading incorrect">Take another look. You’re learning the tricky part.</div>${letterDiff(result.expected,result.answer)}<span class="muted">${escapeHtml(result.tip || 'Notice the highlighted letters, then try again.')}</span>`;
-    $('#answer-submit').innerHTML = (practice.mode === 'drill' ? 'Type it again' : result.correct ? practice.index + 1 >= practice.queue.length ? 'See my session' : 'Next word' : 'Practise the correction') + icon('arrow');
+    $$('.meaning-choice').forEach(b => b.disabled = true);
+    $('#practice-feedback').innerHTML = meaning ? `<div class="feedback-heading ${result.correct ? '' : 'incorrect'}">${result.correct ? 'That’s the meaning.' : 'Keep this meaning in mind.'}</div><span>${escapeHtml(result.expected)}</span>` : result.correct ? `<div class="feedback-heading">${practice.hinted ? 'That’s right. Try recalling it unaided next time.' : practice.correction ? 'Nicely corrected. Keep that spelling in mind.' : 'That’s right. A little more familiar.'}</div>${result.tip ? `<span class="muted">${escapeHtml(result.tip)}</span>` : ''}` : `<div class="feedback-heading incorrect">Take another look. You’re learning the tricky part.</div>${letterDiff(result.expected,result.answer)}<span class="muted">${escapeHtml(result.tip || 'Notice the highlighted letters, then try again.')}</span>`;
+    $('#answer-submit').innerHTML = (practice.mode === 'drill' ? 'Type it again' : result.correct ? practice.index + 1 >= practice.queue.length ? 'See my session' : 'Next word' : meaning ? (practice.index + 1 >= practice.queue.length ? 'See my session' : 'Next word') : 'Practise the correction') + icon('arrow');
     if (practice.mode === 'drill' && practice.target && practice.correct >= practice.target) {finishPractice();}
     else if (practice.mode === 'drill' && result.correct) {drillTimer = setTimeout(() => {if (practice && practice.mode === 'drill' && practice.feedback && $('#practice-dialog').open && !$('#practice-active').hidden) renderPractice();},650);}
   },$('#answer-submit'));
@@ -377,6 +419,7 @@ async function answerSubmit(event) {
   if (practice === session && $('#practice-dialog').open) {
     if (!$('#practice-summary').hidden) $('#practice-summary button').focus();
     else if (practice.feedback) $('#answer-submit').focus();
+    else if (meaning) $('#answer-submit').focus();
     else $('#answer').focus();
   }
 }
@@ -387,7 +430,8 @@ function finishPractice() {
   const p = practice, minutes = Math.max(1,Math.round((Date.now()-p.started)/60000));
   $('#practice-active').hidden = true; $('#practice-summary').hidden = false;
   $('#practice-meter-fill').style.width = '100%';
-  $('#practice-summary').innerHTML = `<div class="practice-summary"><div class="summary-mark">✳</div><span class="eyebrow">A LITTLE PROGRESS, MADE</span><h2>${p.mode === 'drill' ? 'A word, a little more familiar.' : 'You showed up for your words.'}</h2><p>${p.mode === 'drill' ? 'Your repetitions are saved. Come back later to check what you remember.' : 'Every attempt gives your next review a little more direction.'}</p><div class="summary-stats"><div><strong>${p.attempts}</strong><span>${p.mode === 'drill' ? 'repetitions' : 'review attempts'}</span></div><div><strong>${p.correct}</strong><span>correct answers</span></div><div><strong>${minutes}</strong><span>minutes of focus</span></div></div><button class="button primary" data-action="close-practice">Back to my notebook${icon('arrow')}</button></div>`;
+  $('#practice-summary').innerHTML = `<div class="practice-summary"><div class="summary-mark">✳</div><span class="eyebrow">A LITTLE PROGRESS, MADE</span><h2>${p.mode === 'drill' ? 'A word, a little more familiar.' : 'You showed up for your words.'}</h2><p>${p.mode === 'drill' ? 'Your repetitions are saved. Come back later to check what you remember.' : 'Your answers are saved. Meaning scores and spelling recall are tracked separately.'}</p><div class="summary-stats"><div><strong>${p.attempts}</strong><span>${p.mode === 'drill' ? 'repetitions' : 'answers checked'}</span></div><div><strong>${p.correct}</strong><span>correct answers</span></div><div><strong>${minutes}</strong><span>minutes of focus</span></div></div><button class="button primary" data-action="close-practice">Back to my notebook${icon('arrow')}</button></div>`;
+  $('#practice-summary button').focus();
   guarded(refresh);
 }
 function stopPronunciation() {
@@ -397,8 +441,8 @@ function stopPronunciation() {
   audio.removeAttribute('src');
   audio.load();
 }
-async function listen() {
-  if (!practice) return;
+async function listen(automatic = false) {
+  if (!practice || $('#practice-active').hidden || currentWord().audio_flagged) return;
   const id = currentWord().id;
   const sequence = ++audioSequence, audio = $('#pronunciation');
   const url = `/api/words/${id}/audio`;
@@ -407,10 +451,12 @@ async function listen() {
   // Starting play before awaiting also keeps it attached to the user's click.
   // Cambridge downloads still pass through the Python server's configured proxy.
   audio.src = url;
-  try {await audio.play();}
+  $('#playback-status').textContent = 'Loading pronunciation…';
+  try {await audio.play();if (sequence === audioSequence) $('#playback-status').textContent = 'Listening · Alt+P to replay';}
   catch (error) {
     if (sequence !== audioSequence || error.name === 'AbortError') return;
-    if (error.name === 'NotAllowedError') throw new Error('Your browser blocked playback. Allow sound for Typewriter and click Listen again.');
+    $('#playback-status').textContent = 'Playback unavailable. Press Alt+P to try again, or skip this recording.';
+    if (error.name === 'NotAllowedError') {$('#playback-status').textContent = 'Press Alt+P or Listen to allow playback. Your browser needs a playback gesture.';if (automatic) return;throw new Error('Press Listen to allow sound for Typewriter.');}
     // Recover the server's useful lookup/proxy error when a media request failed.
     const response = await fetch(url);
     if (sequence !== audioSequence) return;
@@ -419,9 +465,137 @@ async function listen() {
   }
 }
 async function prepare(ids) {
+  if (state.settings.preparation_method === 'offline') {openPreparation(ids);return;}
+  if (state.settings.preparation_method === 'manual') {toast('Add meanings, sentences, and tips in the word editor.');return;}
   const result = await api('/enrichment/run','POST',ids ? {ids} : {});
   toast(result.message); await refresh();
 }
+
+function renderWordAudio() {
+  const word = state.words.find(w => w.id === editingId);
+  if (!word) return;
+  $('#audio-status').textContent = word.audio_flagged ? 'Flagged as incorrect. Excluded from audio-only exercises.' : word.audio_file ? `Your uploaded recording · ${word.audio_verified ? 'included in' : 'excluded from'} audio-only exercises.` : word.audio_verified ? 'Recording checked · included in audio-only exercises.' : 'Preview and check this recording before including it in audio-only exercises.';
+  $('#audio-verified').checked = !!word.audio_verified && !word.audio_flagged;
+  $('#audio-verified').disabled = !!word.audio_flagged;
+  $('[data-action="restore-audio"]').hidden = !word.audio_flagged;
+  $('[data-action="remove-audio"]').hidden = !word.audio_file;
+}
+async function changeWordAudio(data) {
+  const result = await api(`/words/${editingId}/audio`,'PATCH',data);
+  if (data.flagged) {$('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();}
+  await refresh();renderWordAudio();
+  return result;
+}
+async function previewAudio() {
+  const audio = $('#audio-preview');
+  audio.src = `/api/words/${editingId}/audio?preview=1`;
+  $('#audio-status').textContent = 'Loading pronunciation…';
+  try {await audio.play();await refresh();renderWordAudio();}
+  catch (error) {
+    const response = await fetch(audio.src);
+    if (!response.ok) {const result = await response.json();throw new Error(result.error || 'Pronunciation unavailable.');}
+    throw new Error('The recording could not be played. Check its format or upload a replacement.');
+  }
+}
+async function uploadAudio() {
+  const input = $('#audio-upload'), file = input.files[0];
+  if (!file || !editingId) return;
+  if (file.size > 5*1024*1024) {input.value='';throw new Error('Choose a recording no larger than 5 MB.');}
+  $('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();
+  const data = new FormData();data.append('audio',file);
+  const response = await fetch(`/api/words/${editingId}/audio`,{method:'POST',headers:{'X-Typewriter-Token':token},body:data});
+  const result = await response.json();input.value='';
+  if (!response.ok) throw new Error(result.error || 'Recording could not be saved.');
+  await refresh();renderWordAudio();toast('Recording saved locally and enabled for audio-only exercises.');
+}
+async function removeUploadedAudio() {
+  $('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();
+  await api(`/words/${editingId}/audio`,'DELETE');await refresh();renderWordAudio();
+}
+async function flagPracticeAudio() {
+  if (!practice) return;
+  const word = currentWord();
+  stopPronunciation();
+  await api(`/words/${word.id}/audio`,'PATCH',{flagged:true,verified:false});
+  word.audio_flagged = true;word.audio_eligible = false;
+  $('[data-action="listen"]', $('#practice-dialog')).hidden = true;$('#practice-audio-flag').hidden = true;
+  $('#playback-status').textContent = 'Recording flagged. It will be excluded from audio-only exercises.';
+  if (practice.mode === 'review' && word.exercise === 'audio') {
+    practice.audioBlocked = true;practice.feedback = true;practice.lastCorrect = true;
+    $('#answer').disabled = true;$('#answer-submit').textContent = 'Skip this word';$('#answer-submit').focus();
+  }
+  await refresh();toast('Recording excluded. Upload a replacement in the word editor.');
+}
+function skipAudio() {
+  if (!practice || practice.mode !== 'review' || currentWord().exercise !== 'audio') return;
+  if (answerBusy) return;
+  practice.index++;practice.correction = false;
+  if (practice.index >= practice.queue.length) finishPractice();else renderPractice();
+}
+function openPreparation(ids) {
+  $('#prompt-size').value = state.settings.offline_batch_size;
+  $('#prompt-scope option[value="selected"]').disabled = !selected.size && !ids?.length;
+  $('#prompt-scope').value = ids?.length || selected.size ? 'selected' : 'queue';
+  $('#preparation-dialog').dataset.ids = ids ? JSON.stringify(ids) : '';
+  updatePromptCount();
+  $('#preparation-dialog').showModal();
+}
+function preparationIds() {
+  if ($('#prompt-scope').value !== 'selected') return undefined;
+  return $('#preparation-dialog').dataset.ids ? JSON.parse($('#preparation-dialog').dataset.ids) : [...selected];
+}
+function updatePromptCount() {
+  const ids = preparationIds(), count = state.words.filter(w => w.status !== 'ready' && (!ids || ids.includes(w.id))).length;
+  const size = Number($('#prompt-size').value);
+  $('#prompt-count').textContent = `${count} words waiting · ${size>=1 && size<=100 ? Math.ceil(count/size) : '—'} prompt files`;
+  $('[data-action="download-prompts"]').disabled = !count || !Number.isInteger(size) || size<1 || size>100;
+}
+async function downloadPrompts() {
+  if (!$('#prompt-size').reportValidity()) return;
+  const response = await fetch('/api/preparation/export',{method:'POST',headers:{'Content-Type':'application/json','X-Typewriter-Token':token},body:JSON.stringify({ids:preparationIds(),size:Number($('#prompt-size').value)})});
+  if (!response.ok) {const error=await response.json();throw new Error(error.error || 'Prompts could not be exported.');}
+  const blob = await response.blob(), url = URL.createObjectURL(blob), link = document.createElement('a');
+  link.href=url;link.download=response.headers.get('Content-Disposition')?.match(/filename="?([^";]+)/)?.[1] || 'typewriter-preparation.zip';
+  document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);
+  await refresh();toast('Prompts downloaded. Give one Markdown file at a time to your LLM.');
+}
+function invalidatePreparedPreview() {
+  preparedPreviewText = null;$('#apply-preparation').disabled=true;$('#preparation-preview').innerHTML='';
+}
+async function previewPreparation() {
+  invalidatePreparedPreview();
+  const text = $('#prepared-response').value, result = await api('/preparation/preview','POST',{text});
+  // Do not apply a reply changed while validation was in flight.
+  if ($('#prepared-response').value !== text) return;
+  preparedPreviewText = text;
+  $('#apply-preparation').disabled = !result.words.some(w=>w.fill.length);
+  $('#preparation-preview').innerHTML = `<p class="info-note">${result.words.length} entries · ${result.missing} missing from the batch. Existing text will be kept.</p>` + result.words.map(w=>`<div class="prepared-entry"><strong>${escapeHtml(w.word)}</strong><span class="field-note">${w.removed ? 'Word removed from notebook; will be skipped.' : w.fill.length ? 'Will add: '+escapeHtml(w.fill.join(', ')) : 'Already filled; will be kept.'}</span><p>${escapeHtml(w.definition)}</p><p>${escapeHtml(w.sentence)}</p><p class="muted small">${escapeHtml(w.tip)}</p></div>`).join('');
+}
+async function applyPreparation() {
+  if (!preparedPreviewText || preparedPreviewText !== $('#prepared-response').value) throw new Error('Preview this reply before importing it.');
+  const result = await api('/preparation/import','POST',{text:preparedPreviewText});
+  invalidatePreparedPreview();await refresh();updatePromptCount();
+  toast(`${result.updated} words updated · ${result.skipped} kept or removed · ${result.missing} missing from this reply.`);
+  $('#preparation-preview').textContent = 'Reply imported. You can preview the next batch here.';
+}
+async function refreshModels() {
+  $('#model-note').textContent = 'Checking available model IDs…';
+  try {
+    const result = await api('/models/refresh','POST',{});
+    $('#gemini-models').innerHTML = result.models.map(m=>`<option value="${escapeHtml(m)}"></option>`).join('');
+    $('#model-note').textContent = `${result.models.length} available text models loaded. Choose an exact ID from the suggestions.`;
+  } catch (error) {$('#model-note').textContent = 'Model list unavailable. The API-free workflow is still available.';throw error;}
+}
+$('#audio-upload').addEventListener('change',()=>guarded(uploadAudio));
+$('#audio-verified').addEventListener('change',event=>guarded(()=>changeWordAudio({verified:event.target.checked})));
+$('#prompt-size').addEventListener('input',updatePromptCount);
+$('#prompt-scope').addEventListener('change',updatePromptCount);
+$('#prepared-response').addEventListener('input',invalidatePreparedPreview);
+$('#prepared-file').addEventListener('change',event=>guarded(async()=>{
+  const file=event.target.files[0];if (!file) return;
+  if (file.size>2*1024*1024) throw new Error('Choose a reply smaller than 2 MB.');
+  $('#prepared-response').value=await file.text();invalidatePreparedPreview();event.target.value='';
+}));
 
 const actions = {
   add:() => openWord(), starter:addStarter, review:() => startReview(), 'choose-drill':() => chooseDrill(),
@@ -433,13 +607,21 @@ const actions = {
   import:() => $('#import-file').click(),
   'delete-word':() => {deletingId = editingId;$('#confirm-message').textContent = `This removes “${state.words.find(w => w.id === editingId).word}” and its practice history from this notebook.`;$('#confirm-dialog').showModal();},
   hint:() => {if (!practice) return;practice.hinted = true;$('#practice-word').textContent = currentWord().word;$('#hint-button').hidden = true;$('#practice-label').textContent = 'LOOK, REMEMBER, THEN TYPE';$('#answer').focus();},
-  listen,
+  listen:() => listen(),
+  'offline-preparation':() => openPreparation(),
+  'download-prompts':downloadPrompts, 'preview-preparation':previewPreparation, 'apply-preparation':applyPreparation,
+  'refresh-models':refreshModels, 'preview-audio':previewAudio,
+  'flag-edit-audio':() => changeWordAudio({flagged:true,verified:false}),
+  'restore-audio':() => changeWordAudio({flagged:false,verified:false}),
+  'remove-audio':removeUploadedAudio, 'flag-practice-audio':flagPracticeAudio,
+  'skip-audio':skipAudio,
   'finish-practice':() => {if ($('#practice-summary').hidden) finishPractice();else actions['close-practice']();},
   'close-practice':() => {clearTimeout(drillTimer);stopPronunciation();$('#practice-dialog').close();practice = null;},
 };
 document.addEventListener('click',event => {
+  const choice = event.target.closest('[data-meaning-choice]');if (choice) {selectMeaning(Number(choice.dataset.meaningChoice));return;}
   const page = event.target.closest('[data-page]');if (page) {navigate(page.dataset.page);return;}
-  const close = event.target.closest('[data-close]');if (close) {$('#'+close.dataset.close).close();return;}
+  const close = event.target.closest('[data-close]');if (close) {if (close.dataset.close === 'word-dialog') {$('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();}$('#'+close.dataset.close).close();return;}
   const edit = event.target.closest('[data-edit]');if (edit) {openWord(Number(edit.dataset.edit));return;}
   const drill = event.target.closest('[data-drill]');if (drill) {chooseDrill(Number(drill.dataset.drill));return;}
   const filter = event.target.closest('[data-filter]');if (filter) {wordFilter = filter.dataset.filter;$$('[data-filter]').forEach(b => b.classList.toggle('active',b===filter));renderLibrary();return;}
@@ -477,7 +659,11 @@ $('#drill-options').addEventListener('mousedown',event => {
 $('#drill-toggle').addEventListener('click',() => {const open = $('#drill-options').hidden;$('#drill-search').focus();if (open) filterDrillWords();else showDrillOptions(false);});
 $('#drill-search').addEventListener('blur',() => {showDrillOptions(false);$('#drill-completion').textContent = '';});
 $('#practice-dialog').addEventListener('keydown',event => {
-  if (event.key !== 'Enter' || event.isComposing || $('#practice-active').hidden) return;
+  if (event.isComposing || $('#practice-active').hidden) return;
+  if (event.altKey && event.code === 'KeyP') {event.preventDefault();if (!event.repeat) guarded(() => listen());return;}
+  if (/^[1-4]$/.test(event.key) && practice?.mode === 'review' && currentWord().exercise === 'meaning' && !practice.feedback) {event.preventDefault();selectMeaning(Number(event.key)-1);return;}
+  if (event.key === 'Enter' && practice?.mode === 'review' && currentWord().exercise === 'meaning' && !practice.feedback) {event.preventDefault();answerSubmit(event);return;}
+  if (event.key !== 'Enter') return;
   if (event.repeat) {event.preventDefault();return;}
   if (answerBusy) {event.preventDefault();return;}
   if (practice?.feedback) {event.preventDefault();answerSubmit(event);}
@@ -487,9 +673,11 @@ $('#dictionary-sense').addEventListener('change',applyDictionarySense);
 $('#dictionary-example').addEventListener('change',() => {$('#word-form').elements.sentence.value = $('#dictionary-example').value;});
 $('#word-form').elements.word.addEventListener('input',() => {dictionaryData = null;dictionaryApplied = false;$('#dictionary-choices').hidden = true;});
 $('#practice-show').addEventListener('change',event => {if (practice) {practice.show = event.target.checked;$('#practice-word').textContent = practice.show ? currentWord().word : '';}});
+$('#settings-form').elements.preparation_method.addEventListener('change',event => {$('#settings-form').elements.auto_ai.disabled = event.target.value !== 'api';});
 $('#settings-form').addEventListener('submit',event => {event.preventDefault();guarded(async () => {await saveSettings();await refresh();toast('Settings saved.');},$('#settings-form button[type=submit]'));});
 $('#confirm-delete').addEventListener('click',() => guarded(async () => {await api('/words/'+deletingId,'DELETE');$('#confirm-dialog').close();$('#word-dialog').close();await refresh();toast('Word removed.');},$('#confirm-delete')));
 $('#import-file').addEventListener('change',event => guarded(async () => {const file = event.target.files[0];if (!file) return;if (file.size > 32*1024*1024) throw new Error('Choose a backup smaller than 32 MB.');let backup;try {backup=JSON.parse(await file.text());} catch {throw new Error('That file is not a valid JSON backup.');}const r=await api('/import','POST',backup);await refresh();toast(`${r.added} words imported. ${r.skipped} existing words kept.`);event.target.value='';}));
+$('#word-dialog').addEventListener('close',() => {$('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();});
 $('#practice-dialog').addEventListener('cancel',event => {event.preventDefault();if ($('#practice-summary').hidden) finishPractice();else actions['close-practice']();});
 window.addEventListener('hashchange',() => navigate(location.hash.slice(1)));
 hydrateIcons();

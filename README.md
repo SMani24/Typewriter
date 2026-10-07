@@ -48,11 +48,25 @@ Remove `~/.local/share/applications/typewriter.desktop` to remove the menu entry
 - Find a drill word in an editable dropdown; matches narrow as you type, with Tab completion.
 - Drill for 10, 20, or 50 correct repetitions, or practise without a target.
 - Review due words, or select a set for extra practice. Enter checks an answer and advances through feedback.
-- Choose active reviews and drills in Settings → Practice modes.
+- Choose sentence spelling, spelling from a meaning, audio-only spelling, and meaning quizzes in Settings.
+- Listening exercises play automatically; **Alt+P** plays or replays audio inside a session.
+- Flag incorrect pronunciation, preview recordings, or upload your own voice in the word editor.
 - See recall accuracy, practice activity, and recurring misspellings.
 - Export and import words and history from Settings. Repeated imports don't duplicate attempts.
 
 The optional starter collection includes twelve words and needs no API calls.
+
+Spelling reviews mix the enabled clue types; an exercise only includes words with the
+material it needs. Audio-only exercises show no sentence or definition. Meaning quizzes
+ask you to choose a definition (keys **1–4**, then **Enter**) and have separate scores;
+they do not advance spelling stages. Repeated word drills remain a separate session.
+
+Check a pronunciation in the word editor before including it in audio-only exercises.
+Existing Cambridge recordings start unchecked. Cambridge lookups only offer audio from
+an exact matching headword, avoiding recordings for a base word or redirected typo.
+**Wrong pronunciation?** excludes a recording; an uploaded MP3, WAV, OGG, or M4A
+(up to 5 MB) replaces it and enables listening practice. If the browser blocks automatic
+playback, press **Alt+P** or Listen once to grant a playback gesture.
 
 ## Gemini and request limits
 
@@ -65,6 +79,12 @@ words in each request. Change the batch size, model, daily request budget per ke
 and request pacing in Settings. **Prepare now** processes the queue immediately;
 select words in My words to prepare just that set. It still respects request budgets.
 The default model is `gemini-flash-latest`; you can select a specific Flash version instead.
+Model IDs use forms such as [`gemini-3.5-flash`](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash).
+Common reversed names such as `gemini-flash-3.5` are normalized when saved.
+**Refresh model list** loads available text models through your configured connection.
+Before generation, the app checks model metadata and caches successful checks per key
+for a day. An unavailable model does not consume a local generation-request budget.
+Model discovery and validation are metadata requests, not text-generation requests.
 
 Results are saved locally. Existing text is preserved, and unsuitable sentences are
 rejected. Sources are shown in the word editor; suggestions remain editable.
@@ -82,6 +102,27 @@ Usage and cooldowns survive restarts. Daily counters reset at midnight Pacific t
 so keys from the same project don't provide independent limits. The local request budget
 is a configurable ceiling, not a measurement of your provider's remaining token quota.
 
+## Prepare with any LLM, without an API
+
+Choose **Settings → Word preparation → Preparation method → Another LLM** and save.
+This disables Gemini generation, including automatic batches. Choose **Add material by
+hand** for manual entry instead. Both options work without API keys.
+
+1. Open **Prepare with another LLM** in My words, or the export/import tool in Settings.
+2. Choose the queue or selected words and **1–100 words per file**. Download the ZIP.
+3. Give one Markdown prompt at a time to your chosen LLM. Each includes instructions,
+   vocabulary, a unique batch ID, and the exact JSON output contract.
+4. Paste the reply or open its `.json`, `.md`, or `.txt` file. Preview it, then apply it.
+
+The app also accepts a Markdown reply containing one fenced JSON block. Import validates
+all entries before changing anything, rejects unexpected/duplicate words and unsuitable
+sentences, and fills empty fields while keeping your edits. Partial replies leave omitted
+words queued; repeated imports do not overwrite prepared words. Keep the same notebook
+(database) for export and import: it records which words belong to each batch.
+
+The exported prompts contain your chosen vocabulary and clues. They contain no API keys,
+proxy settings, or practice history. Export and import make no external requests.
+
 ## Proxy
 
 In **Settings → Proxy**, enable HTTP or SOCKS5, enter the host and port, and optionally
@@ -98,7 +139,10 @@ Use **Save & test connection** to check the route; this checks connectivity, not
 Your notebook, settings, request counters, preparation results, the latest 500 log events,
 and cached audio are in **`data/`**. Logs live in SQLite alongside the notebook.
 API keys, proxy credentials, backups, and personal data are excluded from Git.
-Backups contain words and attempts, but no keys or connection settings.
+Backups contain words, attempts, and pronunciation flags, but no keys or connection settings.
+Uploaded recordings are not embedded in JSON backups. Copy the entire `data/` directory
+when moving your notebook and its recordings together.
+Imported Cambridge recordings need checking again before audio-only practice.
 The server binds to localhost and uses same-origin request checks. This is a personal
 local app; internet hosting and multi-user accounts are outside its current scope.
 

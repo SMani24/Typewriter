@@ -63,11 +63,11 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
       await page.screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'today.png'),fullPage:true,animations:'disabled'});
     }
     await page.getByRole('button',{name:'Start my review',exact:true}).click();
-    await page.getByRole('button',{name:'Listen',exact:true}).click();
+    await page.getByRole('button',{name:'Listen · Alt+P',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('#pronunciation').currentTime>0);
     assert((await page.locator('#pronunciation').getAttribute('src')).startsWith('/api/words/'));
     await page.waitForFunction(()=>document.querySelector('#pronunciation').ended);
-    await page.getByRole('button',{name:'Listen',exact:true}).click();
+    await page.getByRole('button',{name:'Listen · Alt+P',exact:true}).click();
     await page.waitForFunction(()=>!document.querySelector('#pronunciation').paused && document.querySelector('#pronunciation').currentTime>0);
     await page.locator('#answer').fill('neccessary');
     await page.locator('#answer').press('Enter');
@@ -181,8 +181,135 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.getByRole('button',{name:'End session',exact:true}).click();
     await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
+    // Exercise selection, custom recordings, and API-free preparation.
+    await page.setViewportSize({width:1360,height:1050});
+    async function preferences(data) {
+      await page.evaluate(async data=>{
+        const response=await fetch('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json','X-Typewriter-Token':document.querySelector('meta[name="typewriter-token"]').content},body:JSON.stringify(data)});
+        if(!response.ok) throw new Error((await response.json()).error);
+      },data);
+      await page.reload();await page.waitForSelector('#app-content:not([hidden])');
+    }
+    async function selectReview(word) {
+      await page.locator('.nav-item[data-page="words"]').click();
+      await page.locator('#word-search').fill(word);
+      await page.getByRole('checkbox',{name:`Select ${word}`,exact:true}).check();
+      await page.getByRole('button',{name:'Review selected',exact:true}).click();
+    }
+    async function notebook() {return page.evaluate(async()=> (await fetch('/api/state')).json());}
+    await preferences({preparation_method:'offline'});
+    await page.locator('.nav-item[data-page="words"]').click();
+    await page.locator('#word-search').fill('necessary');
+    await page.getByRole('button',{name:'Edit necessary',exact:true}).click();
+    await page.getByRole('button',{name:'Flag wrong pronunciation',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#audio-status').textContent.includes('Flagged'));
+    assert(await page.locator('#audio-verified').isDisabled());
+    await page.locator('#audio-upload').setInputFiles({name:'my-pronunciation.wav',mimeType:'audio/wav',buffer:fs.readFileSync(path.join(directory,'test-audio.wav'))});
+    await page.waitForFunction(()=>document.querySelector('#audio-status').textContent.includes('uploaded recording'));
+    assert(await page.locator('#audio-verified').isChecked());
+    await page.getByRole('button',{name:'Preview recording',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#audio-preview').currentTime>0);
+    await page.locator('[data-close="word-dialog"]').click();
+    assert(await page.locator('#audio-preview').evaluate(a=>a.paused && !a.hasAttribute('src')));
+
+    await preferences({sentence_enabled:false,definition_enabled:false,meaning_enabled:false,audio_enabled:true});
+    await selectReview('necessary');
+    await page.waitForFunction(()=>document.querySelector('#pronunciation').currentTime>0);
+    assert.equal(await page.locator('#practice-mode').innerText(),'AUDIO-ONLY SPELLING');
+    assert.equal(await page.locator('#practice-word').innerText(),'');
+    assert.equal(await page.locator('#practice-meaning').innerText(),'');
+    await page.waitForFunction(()=>document.querySelector('#pronunciation').ended);
+    await page.keyboard.press('Alt+p');
+    await page.waitForFunction(()=>!document.querySelector('#pronunciation').paused && document.querySelector('#pronunciation').currentTime>0);
+    await page.getByRole('button',{name:'Wrong pronunciation?',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#answer-submit').textContent==='Skip this word');
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('#practice-summary:not([hidden])');
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(()=>!document.querySelector('#practice-dialog').open);
+    let afterAudio=await notebook();
+    assert.equal(afterAudio.words.find(w=>w.word==='necessary').audio_eligible,false);
+    assert.equal(afterAudio.progress.reviews,1); // Flagging is not a scored mistake.
+    await selectReview('necessary');
+    assert.equal(await page.locator('#practice-dialog').evaluate(d=>d.open),false);
+
+    await preferences({sentence_enabled:false,definition_enabled:true,meaning_enabled:false,audio_enabled:false});
+    await selectReview('necessary');
+    assert.equal(await page.locator('#practice-mode').innerText(),'SPELLING FROM A MEANING');
+    assert((await page.locator('#practice-clue').innerText()).includes('Needed for a particular purpose'));
+    assert(await page.locator('#pronunciation').evaluate(a=>!a.hasAttribute('src')));
+    await page.keyboard.press('Escape');await page.waitForSelector('#practice-summary:not([hidden])');await page.keyboard.press('Enter');
+
+    await preferences({sentence_enabled:false,definition_enabled:false,meaning_enabled:true,audio_enabled:false});
+    const beforeMeaning=await notebook();
+    await selectReview('necessary');
+    assert.equal(await page.locator('#practice-mode').innerText(),'MEANING QUIZ');
+    if(process.env.TYPEWRITER_SCREENSHOTS) await page.screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'meaning-quiz.png'),animations:'disabled'});
+    assert.equal(await page.locator('.meaning-choice').count(),4);
+    await page.setViewportSize({width:390,height:844});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await page.setViewportSize({width:1360,height:1050});
+    const correctIndex=await page.locator('.meaning-choice').evaluateAll(options=>options.findIndex(b=>b.textContent.includes('Needed for a particular purpose')));
+    await page.keyboard.press(String(correctIndex+1));await page.keyboard.press('Enter');
+    await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent.includes('That’s the meaning'));
+    await page.keyboard.press('Enter');await page.waitForSelector('#practice-summary:not([hidden])');await page.keyboard.press('Enter');
+    const afterMeaning=await notebook();
+    assert.equal(afterMeaning.progress.meanings,1);
+    assert.equal(afterMeaning.progress.meanings_correct,1);
+    assert.equal(afterMeaning.progress.reviews,beforeMeaning.progress.reviews);
+    assert.equal(afterMeaning.words.find(w=>w.word==='necessary').stage,beforeMeaning.words.find(w=>w.word==='necessary').stage);
+
+    await preferences({sentence_enabled:true,definition_enabled:false,meaning_enabled:false,audio_enabled:false});
+    await selectReview('environment');
+    assert.equal(await page.locator('#practice-mode').innerText(),'SENTENCE SPELLING');
+    assert((await page.locator('#practice-clue').innerText()).includes('________'));
+    assert.equal(await page.locator('#practice-meaning').innerText(),'');
+    await page.keyboard.press('Escape');await page.waitForSelector('#practice-summary:not([hidden])');await page.keyboard.press('Enter');
+
+    await page.locator('.nav-item[data-page="words"]').click();await page.locator('#word-search').fill('');
+    await page.getByRole('button',{name:'Prepare with another LLM',exact:true}).click();
+    await page.locator('#prompt-scope').selectOption('queue');await page.locator('#prompt-size').fill('2');
+    const downloadEvent=page.waitForEvent('download');
+    await page.getByRole('button',{name:'Download prompt files',exact:true}).click();
+    const download=await downloadEvent;
+    assert(download.suggestedFilename().startsWith('typewriter-preparation-'));
+    const zipPath=path.join(directory,'prompts.zip');await download.saveAs(zipPath);
+    const {execFileSync}=require('node:child_process');
+    const payload=JSON.parse(execFileSync(python,['-c',`import json,sys,zipfile
+with zipfile.ZipFile(sys.argv[1]) as z:
+    prompts=[z.read(n).decode() for n in z.namelist() if n!="README.md"]
+    assert len(prompts)==3
+    p=json.loads(prompts[0].split("\x60\x60\x60json\\n")[1].split("\\n\x60\x60\x60")[0])
+    assert len(p["words"])==2
+    for w in p["words"]: w.update(definition="Generated meaning",sentence="We practise "+w["word"]+" today.",tip="Look at each letter.")
+    print(json.dumps(p))`,zipPath],{encoding:'utf8'}));
+    await page.setViewportSize({width:390,height:844});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await page.setViewportSize({width:1360,height:1050});
+    const reply=JSON.stringify(payload);
+    await page.locator('#prepared-response').fill(reply);
+    await page.getByRole('button',{name:'Preview reply',exact:true}).click();
+    await page.waitForFunction(()=>!document.querySelector('#apply-preparation').disabled);
+    assert.equal(await page.locator('.prepared-entry').count(),2);
+    if(process.env.TYPEWRITER_SCREENSHOTS) await page.screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'prompt-preview.png'),animations:'disabled'});
+    await page.getByRole('button',{name:'Apply to notebook',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#preparation-preview').textContent.includes('Reply imported'));
+    assert(await page.locator('#apply-preparation').isDisabled());
+    const afterImport=await notebook();
+    for(const w of payload.words) assert.equal(afterImport.words.find(i=>i.word===w.word).status,'ready');
+    await page.locator('[data-close="preparation-dialog"]').click();
+    assert.equal(afterImport.enrichment.requests_today,0);
+    await page.locator('.nav-item[data-page="settings"]').click();
+    await page.locator('input[name="model"]').fill('gemini-flash-3.5');
+    await page.locator('input[name="offline_batch_size"]').fill('7');
+    await page.getByRole('button',{name:'Save settings',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('input[name="model"]').value==='gemini-3.5-flash');
+    await page.reload();await page.waitForSelector('#app-content:not([hidden])');
+    assert.equal(await page.locator('input[name="offline_batch_size"]').inputValue(),'7');
+    assert.equal(await page.locator('select[name="preparation_method"]').inputValue(),'offline');
+
     assert.deepEqual(errors,[]);
-    console.log('Browser checks passed: actual audio playback/replay, playback cleanup, combobox filtering and Tab completion, keyboard review corrections, ten repetitions, honest statistics, bulk entry, editing, persisted proxy settings, and mobile layout.');
+    console.log('Browser checks passed: actual audio playback/replay, playback cleanup, combobox filtering and Tab completion, keyboard review corrections, ten repetitions, honest statistics, bulk entry, editing, persisted proxy settings, mobile layout, exercise filtering, automatic audio and keyboard replay, audio replacement and flagging, meaning scores, and offline prompt roundtrip.');
   } finally {
     if(browser) await browser.close();
     server.kill('SIGTERM');
