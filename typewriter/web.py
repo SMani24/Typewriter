@@ -4,7 +4,7 @@ import hashlib
 import os
 import secrets
 from pathlib import Path
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, jsonify, render_template, request, send_file, Response
 from werkzeug.exceptions import HTTPException
 from .store import Store
 from .network import Network, NetworkError
@@ -56,6 +56,7 @@ def create_app(data_dir=None, keys_path=None, background=True):
         if isinstance(error, HTTPException):
             return jsonify(error=error.description), error.code
         # Network exceptions may carry API keys, URLs or proxy credentials.
+        store.log("error", "An unexpected application error occurred. Saved words are safe.")
         return jsonify(error="Something went wrong. Your saved words are safe. Please try again."), 500
 
     def body():
@@ -70,7 +71,12 @@ def create_app(data_dir=None, keys_path=None, background=True):
 
     @app.get("/api/state")
     def state():
-        return jsonify(words=store.list_words(), progress=store.progress(), settings=store.settings(), enrichment=enrichment.snapshot())
+        return jsonify(words=store.list_words(), progress=store.progress(), settings=store.settings(), enrichment=enrichment.snapshot(), logs=store.logs())
+
+    @app.get("/api/logs/export")
+    def export_logs():
+        lines = [f"{r['created']} [{r['level']}] {r['message']}" for r in reversed(store.logs(500))]
+        return Response("\n".join(lines) + "\n", mimetype="text/plain", headers={"Content-Disposition": 'attachment; filename="typewriter-log.txt"'})
 
     @app.get("/api/health")
     def health():

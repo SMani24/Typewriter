@@ -41,3 +41,11 @@ class WebTests(unittest.TestCase):
         self.assertNotIn(secret, self.client.get("/api/state").text)
         self.assertNotIn(secret, self.client.get("/api/export").text)
         self.assertEqual(self.client.get("/api_keys.txt").status_code, 404)
+
+    def test_log_download_only_exposes_curated_events(self):
+        self.app.extensions["store"].log("info", "Preparation started for 5 words.")
+        response = self.client.get("/api/logs/export")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Preparation started for 5 words.", response.text)
+        self.assertIn("typewriter-log.txt", response.headers["Content-Disposition"])
+        self.assertEqual(len(self.client.get("/api/state").json["logs"]), 1)

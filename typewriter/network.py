@@ -32,11 +32,19 @@ class Network:
         try:
             with self.session() as session:
                 return session.request(method, url, **kwargs)
-        except requests.RequestException:
+        except requests.Timeout:
+            message = "The network request timed out. The service or proxy may be slow; your words are saved. Try again shortly."
+            self.store.log("warning", message)
+            raise NetworkError(message) from None
+        except requests.RequestException as error:
             # Exception URLs/headers may include credentials. Never pass them to the UI/log.
+            self.store.log("warning", f"Network transport failed ({type(error).__name__}).")
             if self.store.settings()["proxy_enabled"]:
-                raise NetworkError("Could not connect through the proxy. Check that it is running and that the protocol, host, and port are correct.") from None
-            raise NetworkError("Could not connect. Check your internet connection or enable a proxy in Settings.") from None
+                message = "Could not connect through the proxy. Check that it is running and that the protocol, host, and port are correct."
+            else:
+                message = "Could not connect. Check your internet connection or enable a proxy in Settings."
+            self.store.log("warning", message)
+            raise NetworkError(message) from None
 
     def test(self):
         response = self.request("GET", "https://generativelanguage.googleapis.com", timeout=(8, 12))

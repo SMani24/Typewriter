@@ -62,3 +62,17 @@ class StoreTests(unittest.TestCase):
         sources = self.store.word(self.id)["sources"]
         self.assertEqual(sources["definition"], "Gemini")
         self.assertEqual(sources["tip"], "manual")
+
+    def test_practice_preferences_persist_and_require_one_mode(self):
+        self.store.save_settings({"review_enabled": False})
+        self.assertFalse(Store(self.store.path).settings()["review_enabled"])
+        with self.assertRaises(ValueError):
+            self.store.save_settings({"drill_enabled": False})
+        self.assertTrue(self.store.settings()["drill_enabled"])
+
+    def test_logs_are_bounded_and_not_in_notebook_backups(self):
+        with self.store.db() as db:
+            db.executemany("INSERT INTO app_log (created,level,message) VALUES (?,?,?)", [("2026-01-01", "info", f"Event {i}") for i in range(502)])
+        self.store.log("info", "Latest event")
+        self.assertEqual(len(self.store.logs(1000)), 500)
+        self.assertNotIn("logs", self.store.export())

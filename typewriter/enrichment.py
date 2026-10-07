@@ -5,9 +5,11 @@ import os
 import re
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from .network import NetworkError
+from .store import clean_word
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
@@ -112,7 +114,19 @@ class Enrichment:
         self.pool = KeyPool(store, keys_path)
         self.lock = threading.Lock()
         self.timer = None
-        self.state = {"busy": False, "message": "Ready when you are.", "done": 0, "total": 0, "error": ""}
+        self.state = store.job_state() or {"id": "", "status": "idle", "busy": False, "message": "Ready when you are.", "done": 0, "total": 0, "error": ""}
+        if self.state["busy"]:
+            self.update(busy=False, status="failed", error="Preparation was interrupted when the app stopped. Your words are saved; prepare them again.", message="Preparation interrupted.")
+            store.log("warning", "Preparation interrupted by an application restart.")
+        elif not self.state["id"]:
+            errors = [w["enrichment_error"] for w in self.pending() if w["enrichment_error"]]
+            if errors:
+                self.update(status="failed", error=errors[0], message="Previous preparation did not complete.")
+
+    def update(self, **values):
+        with self.lock:
+            self.state.update(values)
+            self.store.job_state(self.state)
 
     def pending(self, include_errors=True):
         return [w for w in self.store.list_words() if w["status"] != "ready" and (include_errors or not w["enrichment_error"])]
@@ -153,19 +167,24 @@ class Enrichment:
         with self.lock:
             if self.state["busy"]:
                 return {"started": False, "message": "A batch is already running. Your words remain queued."}
-            self.state = {"busy": True, "message": "Preparing your words…", "done": 0, "total": len(words), "error": ""}
+            self.state = {"id": uuid.uuid4().hex, "status": "running", "busy": True, "message": "Preparing your words…", "done": 0, "total": len(words), "error": ""}
+            self.store.job_state(self.state)
         thread = threading.Thread(target=self.run, args=([w["id"] for w in words],), daemon=True)
         thread.start()
         return {"started": True, "message": f"Preparing {len(words)} words in the background."}
 
     def run(self, ids):
         failed = False
+        if not self.state["busy"]:
+            self.update(id=uuid.uuid4().hex, status="running", busy=True, total=len(ids), done=0, error="")
+        self.store.log("info", f"Preparation started for {len(ids)} words.")
         try:
             size = self.store.settings()["batch_size"]
             for offset in range(0, len(ids), size):
                 words = [w for w in self.pending() if w["id"] in ids[offset:offset + size]]
                 if not words:
                     continue
+                self.update(message=f"Preparing words {offset + 1}–{min(offset + size, len(ids))} of {len(ids)}…")
                 content = self.generate(words)
                 completed = 0
                 for w in words:
@@ -174,25 +193,32 @@ class Enrichment:
                     else:
                         with self.store.db() as db:
                             db.execute("UPDATE words SET enrichment_error=? WHERE id=?", ("Some generated fields were missing or unsuitable. Edit manually or prepare again.", w["id"]))
-                with self.lock:
-                    self.state["done"] += completed
-                    self.state["message"] = f"Prepared {self.state['done']} of {self.state['total']} words."
+                self.update(done=self.state["done"] + completed)
+                self.store.log("info" if completed == len(words) else "warning", f"Saved complete material for {completed} of {len(words)} words in this batch.")
+            # A word can be completed manually or deleted while the request runs.
+            remaining = sum(w["id"] in ids for w in self.pending())
+            done = len(ids) - remaining
+            message = f"Prepared {done} of {len(ids)} words."
+            error = f"{remaining} word{'s' if remaining != 1 else ''} still need material: Gemini returned missing or unsuitable fields. Edit them manually or prepare again." if remaining else ""
+            failed = bool(remaining)
+            self.update(done=done, status="partial" if remaining else "completed", message=message, error=error)
         except (ValueError, NetworkError) as error:
             failed = True
             message = str(error)
-            with self.lock:
-                self.state["message"] = message
-                self.state["error"] = message
+            self.store.log("warning", message)
+            self.update(status="failed", message=f"Prepared {self.state['done']} of {len(ids)} words.", error=message)
             with self.store.db() as db:
                 db.executemany("UPDATE words SET enrichment_error=? WHERE id=? AND status!='ready'", [(message, i) for i in ids])
         except Exception:
             failed = True
-            with self.lock:
-                self.state["message"] = "The batch could not be completed. Your words are saved. Try again or add the material manually."
-                self.state["error"] = self.state["message"]
+            message = "The batch could not be completed. Your words are saved. Try again or add the material manually."
+            self.update(status="failed", error=message, message=message)
+            with self.store.db() as db:
+                db.executemany("UPDATE words SET enrichment_error=? WHERE id=? AND status!='ready'", [(message, i) for i in ids])
         finally:
-            with self.lock:
-                self.state["busy"] = False
+            # Fixed summaries cannot contain credentials from transport exceptions.
+            self.store.log("warning" if failed else "info", f"Preparation {self.state['status']}: {self.state['done']} of {self.state['total']} words ready.")
+            self.update(busy=False)
             if not failed:
                 self.auto_schedule()
 
@@ -207,31 +233,44 @@ class Enrichment:
         )
         body = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json", "responseSchema": schema, "maxOutputTokens": 8192, "temperature": 0.4}}
         tried = set()
+        transient_failures = 0
         while True:
             key, key_id = self.pool.reserve(tried)
-            tried.add(key_id)
             self.pool.pace()
             model = self.store.settings()["model"]
             response = self.network.request("POST", f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent", headers={"x-goog-api-key": key}, json=body)
+            self.store.log("info", f"Gemini model {model} returned HTTP {response.status_code} for {len(words)} words.")
+            if response.status_code in (500, 502, 503, 504):
+                transient_failures += 1
+                if transient_failures >= 3:
+                    raise ValueError(f"Gemini returned HTTP {response.status_code} after 3 attempts. The service is temporarily unavailable. Your words are saved; try again later or change the model in Settings.")
+                delay = 2 ** transient_failures
+                self.update(message=f"Gemini is temporarily unavailable (HTTP {response.status_code}). Retrying {transient_failures} of 2…")
+                self.store.log("warning", f"Temporary provider error; retrying after {delay} seconds, within the configured request budget.")
+                time.sleep(delay)
+                continue
             if response.status_code == 429:
+                tried.add(key_id)
                 # QuotaFailure details identify daily limits; unknown 429s get a short cooldown.
                 daily = bool(re.search(r"per.?day|daily|requestsperday|tokensperday", response.text, re.I))
                 delay = max(60, next_reset() - time.time()) if daily else 120
                 self.pool.cool(key_id, delay, "Daily provider quota" if daily else "Provider rate limit")
                 continue
             if response.status_code in [401, 403]:
+                tried.add(key_id)
                 self.pool.cool(key_id, max(60, next_reset() - time.time()), "Key rejected or access unavailable")
                 continue
             if response.status_code == 400:
                 # Invalid keys can also return 400. Other bad requests should not burn more keys.
                 if "API_KEY_INVALID" in response.text or "API key not valid" in response.text:
+                    tried.add(key_id)
                     self.pool.cool(key_id, max(60, next_reset() - time.time()), "Invalid API key")
                     continue
                 raise ValueError("Gemini rejected the request. Check the model name and API access in Settings.")
             if response.status_code == 404:
                 raise ValueError("This Gemini model is unavailable. Choose a model supported by your account in Settings.")
             if response.status_code != 200:
-                raise ValueError("Gemini is temporarily unavailable. Your words remain queued; try again later.")
+                raise ValueError(f"Gemini returned HTTP {response.status_code}. Your words remain queued; try again later.")
             try:
                 payload = response.json()
                 parts = payload["candidates"][0]["content"]["parts"]
@@ -240,6 +279,18 @@ class Enrichment:
                 if not isinstance(items, list):
                     raise ValueError()
                 allowed = {w["word"] for w in words}
-                return {i["word"]: i for i in items if isinstance(i, dict) and i.get("word") in allowed}
+                result = {}
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        word = clean_word(item.get("word"))
+                    except ValueError:
+                        continue
+                    if word in allowed:
+                        result[word] = item
+                self.store.log("info", f"Received matching entries for {len(result)} of {len(words)} words.")
+                return result
             except (KeyError, IndexError, TypeError, ValueError):
+                self.store.log("warning", "Gemini response had no usable structured vocabulary. No raw response was recorded.")
                 raise ValueError("Gemini returned an incomplete response. Your words are saved; try preparing them again.") from None

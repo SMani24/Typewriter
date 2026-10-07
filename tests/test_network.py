@@ -124,3 +124,53 @@ class NetworkTests(unittest.TestCase):
         self.assertEqual(request.call_count, 2)
         self.assertFalse(self.enrichment.snapshot()["busy"])
         self.assertIn("cooling down", self.enrichment.snapshot()["error"])
+
+    def test_partial_results_are_visible_and_survive_restart(self):
+        ids = self.store.add_words([{"word": "necessary"}, {"word": "different"}])["added"]
+        self.enrichment.generate = Mock(return_value={"necessary": {"definition": "Needed", "sentence": "It is necessary.", "tip": "One c."}})
+        self.enrichment.run(ids)
+        job = self.enrichment.snapshot()
+        self.assertEqual((job["status"], job["done"], job["total"]), ("partial", 1, 2))
+        self.assertIn("1 word", job["error"])
+        restarted = Enrichment(self.store, self.network, self.keys)
+        self.assertEqual(restarted.snapshot()["error"], job["error"])
+        self.assertTrue(self.store.logs())
+
+    def test_temporary_server_errors_retry_with_a_limit_and_budget(self):
+        word_id = self.store.add_words([{"word": "necessary"}])["added"][0]
+        response = Mock(status_code=503, text="secret provider body")
+        with patch.object(self.network, "request", return_value=response) as request, patch("typewriter.enrichment.time.sleep"):
+            self.enrichment.run([word_id])
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual(self.enrichment.pool.snapshot()["requests_today"], 3)
+        self.assertIn("HTTP 503 after 3 attempts", self.enrichment.snapshot()["error"])
+        self.assertNotIn(response.text, json.dumps(self.store.logs()))
+        for key in parse_keys(self.keys.read_text()):
+            self.assertNotIn(key, json.dumps(self.store.logs()))
+
+    def test_retry_can_recover_and_accept_capitalized_word(self):
+        word_id = self.store.add_words([{"word": "necessary"}])["added"][0]
+        busy = Mock(status_code=503)
+        good = Mock(status_code=200)
+        good.json.return_value = {"candidates": [{"content": {"parts": [{"text": json.dumps({"words": [{"word": "Necessary", "definition": "Needed", "sentence": "This is necessary.", "tip": "One c."}]})}]}}]}
+        with patch.object(self.network, "request", side_effect=[busy, good]), patch("typewriter.enrichment.time.sleep"):
+            self.enrichment.run([word_id])
+        self.assertEqual(self.enrichment.snapshot()["status"], "completed")
+        self.assertEqual(self.store.word(word_id)["status"], "ready")
+
+    def test_interrupted_job_is_reported_after_restart(self):
+        self.store.job_state({"id": "test-job", "status": "running", "busy": True, "message": "Preparing", "done": 0, "total": 1, "error": ""})
+        restarted = Enrichment(self.store, self.network, self.keys)
+        self.assertFalse(restarted.snapshot()["busy"])
+        self.assertIn("interrupted", restarted.snapshot()["error"])
+
+    def test_transport_logs_never_include_exception_credentials(self):
+        import requests
+        secret = "private-key-and-proxy-password"
+        with patch("requests.Session.request", side_effect=requests.ReadTimeout(secret)):
+            with self.assertRaisesRegex(NetworkError, "timed out"):
+                self.network.request("GET", "https://example.test")
+        with patch("requests.Session.request", side_effect=requests.ConnectionError(secret)):
+            with self.assertRaises(NetworkError):
+                self.network.request("GET", "https://example.test")
+        self.assertNotIn(secret, json.dumps(self.store.logs()))

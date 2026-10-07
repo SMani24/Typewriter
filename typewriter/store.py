@@ -12,6 +12,7 @@ DEFAULTS = {
     "proxy_port": 10808, "proxy_username": "", "proxy_password": "",
     "model": "gemini-flash-latest", "auto_ai": True, "batch_size": 5,
     "daily_budget": 20, "requests_per_minute": 4,
+    "review_enabled": True, "drill_enabled": True,
 }
 
 
@@ -69,6 +70,10 @@ class Store:
                     PRIMARY KEY (key_id, day)
                 );
                 CREATE TABLE IF NOT EXISTS cache (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS app_log (
+                    id INTEGER PRIMARY KEY, created TEXT NOT NULL,
+                    level TEXT NOT NULL, message TEXT NOT NULL
+                );
             """)
 
     @contextmanager
@@ -97,9 +102,11 @@ class Store:
                 if key == "proxy_password" and data[key] == "" and not data.get("clear_proxy_password"):
                     continue
                 values[key] = data[key]
-        for key in ["proxy_enabled", "auto_ai"]:
+        for key in ["proxy_enabled", "auto_ai", "review_enabled", "drill_enabled"]:
             if not isinstance(values[key], bool):
                 raise ValueError("Choose an on/off setting.")
+        if not values["review_enabled"] and not values["drill_enabled"]:
+            raise ValueError("Keep at least one practice mode active.")
         for key, low, high in [("proxy_port", 1, 65535), ("batch_size", 1, 25), ("daily_budget", 1, 2000), ("requests_per_minute", 1, 60)]:
             if not isinstance(values[key], int) or not low <= values[key] <= high:
                 raise ValueError(f"{key.replace('_', ' ').capitalize()} must be between {low} and {high}.")
@@ -115,6 +122,23 @@ class Store:
         with self.db() as db:
             db.executemany("INSERT OR REPLACE INTO settings VALUES (?,?)", [(k, json.dumps(v)) for k, v in values.items()])
         return self.settings()
+
+    def log(self, level, message):
+        # Callers supply curated messages only, never provider bodies or exception text.
+        with self.db() as db:
+            db.execute("INSERT INTO app_log (created,level,message) VALUES (?,?,?)", (now(), level, message))
+            db.execute("DELETE FROM app_log WHERE id NOT IN (SELECT id FROM app_log ORDER BY id DESC LIMIT 500)")
+
+    def logs(self, limit=50):
+        with self.db() as db:
+            return [dict(r) for r in db.execute("SELECT * FROM app_log ORDER BY id DESC LIMIT ?", (limit,))]
+
+    def job_state(self, value=None):
+        with self.db() as db:
+            if value is not None:
+                db.execute("INSERT OR REPLACE INTO cache VALUES ('preparation-job',?)", (json.dumps(value),))
+            row = db.execute("SELECT value FROM cache WHERE name='preparation-job'").fetchone()
+            return json.loads(row["value"]) if row else None
 
     def list_words(self):
         with self.db() as db:
