@@ -47,7 +47,7 @@ Remove `~/.local/share/applications/typewriter.desktop` to remove the menu entry
 - Ask Gemini to fill missing meanings, sentences, and spelling tips in batches.
 - Find a drill word in an editable dropdown; matches narrow as you type, with Tab completion.
 - Drill for 10, 20, or 50 correct repetitions, or practise without a target.
-- Review due words, or select a set for extra practice. Enter checks an answer; a result card stays visible until you press Enter again.
+- Review due words, select a set for extra practice, or choose **Practise endlessly** on Today. Enter checks an answer; a result card stays visible until you press Enter again.
 - Choose sentence spelling, spelling from a meaning, audio-only spelling, and meaning quizzes in Settings.
 - Listening exercises play automatically; **Alt+P** plays or replays audio inside a session.
 - Flag incorrect pronunciation, preview recordings, or upload your own voice in the word editor.
@@ -69,10 +69,21 @@ through 1, 3, 7, 14, and 30-day intervals, with at most one promotion per day. A
 or hint brings the word back after ten minutes. Selecting words allows an earlier review.
 Quiz questions use their own meaning results to choose words, separately from spelling.
 
+Short reviews use up to **ten due spelling words** by default: a convenient session
+length, independent of how words are ranked. Change **Words in a short review** in
+Settings to any value from 1–100; selected reviews use the whole selection.
+**Practise endlessly** keeps the same exercises and quiz spacing until you press
+**Escape** or End session. It starts with due words, then revisits your notebook as
+extra practice, choosing another set using your latest performance. **Endless review**
+in the selection bar stays within the selected words. Meaning-only sessions can
+continue endlessly too. Each answer is saved immediately; ending shows your totals.
+Repeated successes still earn at most one spelling-stage promotion per day.
+
 In **Settings → Exercises & sessions → Meaning quiz rhythm**, use the sliders for a
 fixed interval (five spelling words by default) or a random inclusive range such as
 **2–7**. A new random gap is drawn after each quiz. Spacing applies within each review
-session; quizzes are extra questions alongside the ten spelling words. Corrections
+session, including across word sets in endless mode; quizzes are extra questions
+alongside the chosen number of spelling words. Corrections
 don't count as another word, and unanswered skips don't count. If meaning quizzes are
 the only available exercise, the session contains quizzes throughout.
 Press **Enter** after quiz feedback when you're ready to continue.

@@ -45,4 +45,47 @@ assert(session.meaningOnly);
 assert(session.queue.every(w=>w.exercise==='meaning'));
 rules.advance(session,quizzes);
 assert.equal(session.queue.length,2);
-console.log('Review checks passed: fixed/random gaps, fresh draws, extra quizzes, correction/skip counting, unavailable words, and meaning-only sessions.');
+// Endless sessions preserve cadence across refills and keep only a small active set.
+session=rules.create(spelling(),quizzes,{...fixed,quiz_interval_min:7,quiz_interval_max:7},Math.random,{endless:true});
+let spellings=0, quizPositions=[], refills=0;
+while(spellings<30) {
+  const word=session.queue[session.index];
+  if(word.exercise==='meaning') quizPositions.push(spellings);
+  else {rules.recordSpelling(session,word);spellings++;}
+  if(!rules.advance(session,quizzes)) {
+    assert(session.needsRefill);
+    const completed=session.questionsDone;
+    assert.equal(rules.advance(session,quizzes),false); // Retrying a failed refresh is idempotent.
+    assert.equal(session.questionsDone,completed);
+    assert.equal(rules.replenish(session,[],[]),false);
+    assert(session.needsRefill);
+    assert(rules.replenish(session,spelling(),quizzes));
+    refills++;
+    assert.equal(session.wordsSinceQuiz,spellings%7);
+  }
+  assert(session.queue.length<=12);
+}
+assert.deepEqual(quizPositions,[7,14,21,28]);
+assert.equal(refills,3);
+assert.equal(session.spellingsDone,30);
+
+// A single selected word works repeatedly without stale per-question flags.
+session=rules.create(spelling().slice(0,1),[],fixed,Math.random,{endless:true});
+for(let i=0;i<4;i++) {
+  rules.recordSpelling(session,session.queue[0]);
+  assert.equal(rules.advance(session,[]),false);
+  assert(rules.replenish(session,spelling().slice(0,1),[]));
+}
+assert.equal(session.wordsSinceQuiz,4);
+assert.equal(session.questionsDone,4);
+assert.equal(session.queue.length,1);
+
+// Meaning-only endless reviews also refill and avoid immediate repeats.
+session=rules.create([],quizzes,fixed,Math.random,{endless:true});
+rules.advance(session,quizzes);rules.advance(session,quizzes);
+assert(rules.replenish(session,[],[quizzes[1],quizzes[0]]));
+assert.equal(session.queue[0].id,quizzes[0].id);
+assert.equal(session.questionsDone,2);
+assert(session.meaningOnly);
+assert.equal(rules.replenish(rules.create(spelling(),quizzes,fixed),spelling(),quizzes),false);
+console.log('Review checks passed: fixed/random rhythm, correction and skip counting, unavailable words, endless cadence across refills, safe retries, bounded queues, one-word repeats, and meaning-only sessions.');

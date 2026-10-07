@@ -160,7 +160,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
 
     await page.getByRole('button',{name:'Prepare selected now',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('#queue-banner').textContent.includes('missing or unsuitable fields'));
-    assert((await page.locator('#toast').innerText()).includes('still need material'));
+    await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('still need material'));
     await page.waitForSelector('#failure-dialog[open]');
     assert((await page.locator('#failure-message').innerText()).includes('missing or unsuitable'));
     await page.getByRole('button',{name:'Not now',exact:true}).click();
@@ -458,8 +458,105 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     assert.equal(await page.locator('#quiz-min').inputValue(),'2');
     assert.equal(await page.locator('#quiz-max').inputValue(),'7');
 
+    // Short session size is saved independently of quiz spacing.
+    await page.locator('input[name="review_session_size"]').fill('2');
+    await page.getByRole('button',{name:'Save settings',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#toast').textContent==='Settings saved.');
+    await preferences({meaning_enabled:false});
+    assert.equal(await page.locator('input[name="review_session_size"]').inputValue(),'2');
+    await page.locator('.nav-item[data-page="today"]').click();
+    await page.getByRole('button',{name:'Start my review',exact:true}).click();
+    assert((await page.locator('#practice-count').innerText()).endsWith('OF 2'));
+    await page.keyboard.press('Escape');
+    await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
+
+    // An endless mixed session crosses the old limit and carries a seven-word gap.
+    await preferences({meaning_enabled:true,quiz_interval_mode:'fixed',quiz_interval_min:7,quiz_interval_max:7});
+    const beforeEndless=await notebook();
+    await page.locator('.nav-item[data-page="today"]').click();
+    await page.getByRole('button',{name:'Practise endlessly',exact:false}).click();
+    assert(await page.locator('.practice-meter').isHidden());
+    let endlessSpellings=0, endlessQuizzes=[];
+    while(endlessSpellings<16) {
+      assert(await page.locator('#practice-summary').isHidden());
+      if((await page.locator('#practice-mode').innerText())==='MEANING QUIZ') {
+        endlessQuizzes.push(endlessSpellings);
+        const target=await page.locator('#practice-word').innerText();
+        const definition=beforeEndless.words.find(w=>w.word===target).definition;
+        const index=await page.locator('.meaning-choice').evaluateAll((options,meaning)=>options.findIndex(b=>b.textContent.includes(meaning)),definition);
+        await page.keyboard.press(String(index+1));
+        await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent.includes('That’s the meaning'));
+      } else {
+        const clue=await page.locator('#practice-clue').innerText();
+        // Several generated fixtures share the same sentence after blanking the word.
+        const id=await page.evaluate(()=>currentWord().id);
+        const word=beforeEndless.words.find(w=>w.id===id);
+        assert(word);assert.equal(clue,word.clue);
+        await page.locator('#answer').fill(word.word);await page.locator('#answer').press('Enter');
+        await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent.includes('Correct spelling!'));
+        endlessSpellings++;
+      }
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent==='');
+    }
+    assert.deepEqual(endlessQuizzes,[7,14]);
+    assert((await page.locator('#practice-count').innerText()).includes('17 · ENDLESS'));
+    const afterEndless=await notebook();
+    assert.equal(afterEndless.progress.reviews,beforeEndless.progress.reviews+16);
+    assert.equal(afterEndless.progress.meanings,beforeEndless.progress.meanings+2);
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('#practice-summary:not([hidden])');
+    assert((await page.locator('#practice-summary').innerText()).includes('18'));
+    await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
+
+    // A selected, already-reviewed word repeats; a failed refill never regrades it.
+    await preferences({meaning_enabled:false});
+    await page.locator('.nav-item[data-page="words"]').click();
+    await page.locator('#word-search').fill('necessary');
+    await page.getByRole('checkbox',{name:'Select necessary',exact:true}).check();
+    await page.getByRole('button',{name:'Endless review',exact:false}).click();
+    const beforeSingle=await notebook();
+    for(let i=0;i<3;i++) {
+      assert.equal(await page.locator('#practice-clue').innerText(),correctedWord.clue);
+      await page.locator('#answer').fill('necessary');await page.locator('#answer').press('Enter');
+      await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent.includes('Correct spelling!'));
+      if(i===0) {
+        await page.evaluate(()=> {
+          const original=window.fetch;
+          window.fetch=(...args)=> {
+            if(args[0]==='/api/state') {window.fetch=original;return Promise.reject(new Error('Temporary test connection failure'));}
+            return original(...args);
+          };
+        });
+        await page.keyboard.press('Enter');
+        await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent.includes('Couldn’t load the next words'));
+        assert((await page.locator('#practice-feedback').innerText()).includes('answers are saved'));
+      }
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent==='');
+      assert((await page.locator('#practice-count').innerText()).includes(`${i+2} · ENDLESS`));
+    }
+    assert.equal((await notebook()).progress.reviews,beforeSingle.progress.reviews+3);
+    await page.keyboard.press('Escape');await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
+
+    // Meaning-only endless reviews continue even with a single selected word.
+    await preferences({sentence_enabled:false,meaning_enabled:true});
+    await page.locator('.nav-item[data-page="words"]').click();
+    await page.locator('#word-search').fill('necessary');
+    await page.getByRole('checkbox',{name:'Select necessary',exact:true}).check();
+    await page.getByRole('button',{name:'Endless review',exact:false}).click();
+    for(let i=0;i<3;i++) {
+      const index=await page.locator('.meaning-choice').evaluateAll((options,meaning)=>options.findIndex(b=>b.textContent.includes(meaning)),correctedWord.definition);
+      await page.keyboard.press(String(index+1));
+      await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent.includes('That’s the meaning'));
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent==='');
+      assert.equal(await page.locator('#practice-count').innerText(),`QUIZ ${i+2} · ENDLESS`);
+    }
+    await page.keyboard.press('Escape');await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
+
     assert.deepEqual(errors,[]);
-    console.log('Browser checks passed: actual audio playback/replay, playback cleanup, combobox filtering and Tab completion, keyboard review corrections, ten repetitions, honest statistics, bulk entry, editing, persisted proxy settings, mobile layout, exercise filtering, automatic audio and keyboard replay, audio replacement and flagging, meaning scores, offline prompt roundtrip, failure popup and scoped fallback, meaning flags, re-evaluation controls, generated quiz options, protected meaning correction, immediate keyboard/click quiz answers, two quizzes alongside ten spelling words, and saved range sliders.');
+    console.log('Browser checks passed: actual audio playback/replay, playback cleanup, combobox filtering and Tab completion, keyboard review corrections, ten repetitions, honest statistics, bulk entry, editing, persisted proxy settings, mobile layout, exercise filtering, automatic audio and keyboard replay, audio replacement and flagging, meaning scores, offline prompt roundtrip, failure popup and scoped fallback, meaning flags, re-evaluation controls, generated quiz options, protected meaning correction, immediate keyboard/click quiz answers, two quizzes alongside ten spelling words, saved range sliders, adjustable short sessions, endless spelling and quiz cadence across refills, saved totals on Escape, selected one-word repetition, safe refill retry, and endless meaning-only reviews.');
   } finally {
     if(browser) await browser.close();
     server.kill('SIGTERM');

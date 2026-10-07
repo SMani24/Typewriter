@@ -60,3 +60,6 @@ dialog{border:1px solid #dce1d2;color:var(--ink);background:var(--white);border-
 .rhythm-quiz{background:#e0bd73;color:#594015;border:1px solid #c9a45d;font-family:var(--serif);font-size:18px!important}
 @media(max-width:560px){.quiz-rhythm{padding:15px}.quiz-rhythm h4{font-size:21px}.rhythm-preview{padding:9px;gap:4px}}
 @media(prefers-reduced-motion:reduce){.rhythm-preview>span{animation:none}.quiz-rhythm{transition:none}}
+
+/* Short reviews and open-ended practice share the same rhythm. */
+.review-actions{display:flex;flex-wrap:wrap;gap:10px}.hero .review-actions .button{min-width:0}.session-length{margin:22px 0;padding-top:18px;border-top:1px solid var(--line)}.session-length label{max-width:220px}.session-length .field-note{margin-top:9px}.session-length strong{font-weight:500}
