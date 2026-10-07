@@ -22,6 +22,24 @@ Open **http://127.0.0.1:8080**. Use `python app.py --port 8081` to change the po
 
 Python 3.10 or newer is required. On Windows, activate with `.venv\Scripts\activate`.
 
+### Pop!_OS / Linux launcher
+
+After setting up the Python environment, install the application-menu entry:
+
+```bash
+python3 desktop/install.py
+```
+
+Search for **Typewriter** in your application launcher and open it. It starts the
+local server in the background and opens your default browser. Repeated clicks reuse
+the running server. If port 8080 is occupied by another app, a nearby free port is used.
+No terminal or administrator privileges are needed for normal launching.
+
+Closing the browser tab leaves the server running. The launcher's **Stop Typewriter**
+action stops a server it started; you can also run `python3 desktop/launch.py --stop`.
+Keep the project folder in place, or rerun the installer after moving it.
+Remove `~/.local/share/applications/typewriter.desktop` to remove the menu entry.
+
 ## Your notebook
 
 - Add individual words with manual clues, or paste a list of words.

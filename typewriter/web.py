@@ -1,5 +1,6 @@
 """Local HTTP interface. Secrets stay on the server, never in the browser bundle."""
 import json
+import hashlib
 import os
 import secrets
 from pathlib import Path
@@ -70,6 +71,10 @@ def create_app(data_dir=None, keys_path=None, background=True):
     @app.get("/api/state")
     def state():
         return jsonify(words=store.list_words(), progress=store.progress(), settings=store.settings(), enrichment=enrichment.snapshot())
+
+    @app.get("/api/health")
+    def health():
+        return jsonify(app="typewriter", instance=hashlib.sha256(str(store.path.resolve()).encode()).hexdigest())
 
     @app.post("/api/words")
     def add_words():
