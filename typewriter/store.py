@@ -16,6 +16,7 @@ DEFAULTS = {
     "review_enabled": True, "drill_enabled": True,
     "sentence_enabled": True, "definition_enabled": True, "audio_enabled": True,
     "meaning_enabled": True, "preparation_method": "api", "offline_batch_size": 20,
+    "quiz_interval_mode": "fixed", "quiz_interval_min": 5, "quiz_interval_max": 5,
 }
 
 
@@ -127,6 +128,13 @@ class Store:
             raise ValueError("Choose at least one review exercise, or turn off review sessions.")
         if values["preparation_method"] not in ("api", "offline", "manual"):
             raise ValueError("Choose Gemini API, another LLM, or manual preparation.")
+        if values["quiz_interval_mode"] not in ("fixed", "range"):
+            raise ValueError("Choose a fixed quiz interval or a random range.")
+        for key in ("quiz_interval_min", "quiz_interval_max"):
+            if type(values[key]) is not int or not 1 <= values[key] <= 10:
+                raise ValueError("Quiz intervals must be whole numbers between 1 and 10.")
+        if values["quiz_interval_min"] > values["quiz_interval_max"] or values["quiz_interval_mode"] == "fixed" and values["quiz_interval_min"] != values["quiz_interval_max"]:
+            raise ValueError("The minimum quiz interval cannot exceed the maximum; fixed intervals need matching values.")
         for key, low, high in [("offline_batch_size", 1, 100), ("proxy_port", 1, 65535), ("batch_size", 1, 25), ("daily_budget", 1, 2000), ("requests_per_minute", 1, 60)]:
             if not isinstance(values[key], int) or not low <= values[key] <= high:
                 raise ValueError(f"{key.replace('_', ' ').capitalize()} must be between {low} and {high}.")
@@ -167,6 +175,17 @@ class Store:
                 COUNT(CASE WHEN a.mode='drill' THEN 1 END) AS drills,
                 MAX(a.created) AS last_practised
                 FROM words w LEFT JOIN attempts a ON a.word_id=w.id GROUP BY w.id ORDER BY w.created DESC,w.id DESC""").fetchall()
+            recent = db.execute("""WITH ranked AS (
+                SELECT id,word_id,mode,hinted,correct,created,
+                ROW_NUMBER() OVER (PARTITION BY word_id,mode,hinted ORDER BY id DESC) AS position
+                FROM attempts WHERE mode IN ('review','meaning')
+            ) SELECT word_id,mode,hinted,COUNT(*) AS total,SUM(correct) AS correct,
+                MAX(CASE WHEN position=1 THEN id END) AS last_id,
+                MAX(CASE WHEN position=1 THEN correct END) AS last_correct,
+                MAX(CASE WHEN position=1 THEN created END) AS last_created
+                FROM ranked WHERE position<=8 GROUP BY word_id,mode,hinted""").fetchall()
+            results = {(r["word_id"], r["mode"], r["hinted"]): dict(r) for r in recent}
+            timestamp = datetime.now(timezone.utc)
             words = []
             for row in rows:
                 w = dict(row)
@@ -177,8 +196,26 @@ class Store:
                 w["accuracy"] = round(100 * w["correct_reviews"] / w["reviews"]) if w["reviews"] else None
                 w["is_due"] = w["due"] <= now()
                 w["state"] = "New" if not w["reviews"] else ("Confident" if w["stage"] >= 3 else "Learning")
+                recall = results.get((w["id"], "review", 0), {})
+                assisted = results.get((w["id"], "review", 1), {})
+                latest = max((recall, assisted), key=lambda r: r.get("last_id", 0))
+                meanings = results.get((w["id"], "meaning", 0), {})
+                w["recent_reviews"] = recall.get("total", 0)
+                w["recent_accuracy"] = round(100 * recall["correct"] / recall["total"]) if recall else None
+                w["needs_help"] = bool(latest and (latest is assisted or not latest["last_correct"]))
+                overdue = max(0, (timestamp - datetime.fromisoformat(w["due"])).total_seconds() / 86400)
+                w["review_priority"] = self.practice_priority(recall, w["needs_help"], overdue)
+                meaning_age = max(0, (timestamp - datetime.fromisoformat(meanings["last_created"])).total_seconds() / 86400) if meanings else 0
+                w["meaning_priority"] = self.practice_priority(meanings, bool(meanings and not meanings["last_correct"]), meaning_age)
                 words.append(w)
             return words
+
+    @staticmethod
+    def practice_priority(results, needs_help, days_waiting):
+        # A small prior gives new words a fair place. Recent struggles matter more
+        # than lifetime totals, while old overdue words gradually catch up.
+        success = (results.get("correct", 0) + 1) / (results.get("total", 0) + 2)
+        return 4 * (1 - success) + 2 * needs_help + min(int(days_waiting) / 7, 6)
 
     def word(self, word_id):
         return next((w for w in self.list_words() if w["id"] == word_id), None)
