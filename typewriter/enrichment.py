@@ -231,14 +231,16 @@ class Enrichment:
             "Do not quote dictionaries. Do not include the target spelling in definitions. Return one entry for every supplied word, and no other entries. Vocabulary: "
             + json.dumps([{k: w[k] for k in ["word", "definition", "tag"]} for w in words])
         )
-        body = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json", "responseSchema": schema, "maxOutputTokens": 8192, "temperature": 0.4}}
+        body = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json", "responseSchema": schema, "maxOutputTokens": 8192, "temperature": 1.0}}
         tried = set()
         transient_failures = 0
         while True:
             key, key_id = self.pool.reserve(tried)
             self.pool.pace()
             model = self.store.settings()["model"]
-            response = self.network.request("POST", f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent", headers={"x-goog-api-key": key}, json=body)
+            # Thinking models can take longer than a dictionary lookup. Give a batch
+            # time to finish without repeating a slow request and spending more quota.
+            response = self.network.request("POST", f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent", headers={"x-goog-api-key": key}, json=body, timeout=(10, 120))
             self.store.log("info", f"Gemini model {model} returned HTTP {response.status_code} for {len(words)} words.")
             if response.status_code in (500, 502, 503, 504):
                 transient_failures += 1
