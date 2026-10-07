@@ -43,3 +43,20 @@ dialog{border:1px solid #dce1d2;color:var(--ink);background:var(--white);border-
 @keyframes checking-answer{50%{opacity:.45}}
 @media(max-width:560px){.feedback-card{padding:15px 13px;gap:11px}.feedback-card .feedback-heading{font-size:22px}.feedback-mark{width:32px;height:32px}.feedback-tip{font-size:11px}#answer-submit{width:100%;min-width:0}}
 @media(prefers-reduced-motion:reduce){.feedback-card,#answer-form[data-result="checking"] .feedback-mark{animation:none}}
+
+.quiz-rhythm{margin:20px 0;padding:20px;border:1px solid #d9decc;border-radius:10px;background:#f3f3e8;transition:opacity .2s}
+.quiz-rhythm.inactive{opacity:.55}
+.rhythm-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
+.rhythm-badge{font-family:var(--serif);font-size:18px;color:#6e805f}
+.quiz-rhythm h4{font-family:var(--serif);font-size:23px;font-weight:400;line-height:1.25;margin:0 0 17px;color:#354c38}
+.quiz-rhythm>label{margin-bottom:16px}
+.quiz-rhythm .rhythm-slider-label{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:11px}
+.rhythm-slider-label output{display:grid;place-items:center;min-width:30px;height:30px;padding:0 6px;background:#dfe8d5;border-radius:7px;font-family:var(--serif);font-size:21px;color:#365b38}
+.quiz-rhythm input[type=range]{width:100%;height:29px;padding:0;margin:6px 0;background:transparent;border:0;box-shadow:none;accent-color:#547448;cursor:pointer}
+.quiz-rhythm input[type=range]:focus-visible{outline:2px solid #b49961;outline-offset:3px}
+.rhythm-preview{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin:14px 0 11px;padding:12px;border-radius:8px;background:#e8ecdd}
+.rhythm-preview>span{display:grid;place-items:center;width:24px;height:26px;border-radius:5px;font-size:10px;animation:answer-result .2s ease-out}
+.rhythm-word{background:#fafbf5;color:#556650;border:1px solid #d6ddc8}
+.rhythm-quiz{background:#e0bd73;color:#594015;border:1px solid #c9a45d;font-family:var(--serif);font-size:18px!important}
+@media(max-width:560px){.quiz-rhythm{padding:15px}.quiz-rhythm h4{font-size:21px}.rhythm-preview{padding:9px;gap:4px}}
+@media(prefers-reduced-motion:reduce){.rhythm-preview>span{animation:none}.quiz-rhythm{transition:none}}

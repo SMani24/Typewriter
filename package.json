@@ -1,6 +1,6 @@
 {
   "name": "typewriter-browser-checks",
   "private": true,
-  "scripts": {"test": "node tests/browser.cjs"},
+  "scripts": {"test": "node tests/review.cjs && node tests/browser.cjs"},
   "devDependencies": {"playwright": "^1.58.2"}
 }

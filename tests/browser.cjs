@@ -290,7 +290,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.setViewportSize({width:1360,height:1050});
     const correctIndex=await page.locator('.meaning-choice').evaluateAll(options=>options.findIndex(b=>b.textContent.includes('Needed for a particular purpose')));
-    await page.keyboard.press(String(correctIndex+1));await page.keyboard.press('Enter');
+    await page.keyboard.press(String(correctIndex+1));
     await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent.includes('That’s the meaning'));
     await page.keyboard.press('Enter');await page.waitForSelector('#practice-summary:not([hidden])');await page.keyboard.press('Enter');
     const afterMeaning=await notebook();
@@ -352,9 +352,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     await preferences({meaning_enabled:true,sentence_enabled:false,definition_enabled:false,audio_enabled:false});
     const beforeFlag=await notebook();
     await selectReview('necessary');
-    await page.keyboard.press('1');
     await page.getByRole('button',{name:'Wrong meaning?',exact:true}).click();
-    await page.keyboard.press('Enter');
     await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent.includes('flagged'));
     assert.equal((await notebook()).progress.meanings,beforeFlag.progress.meanings);
     await page.keyboard.press('Enter');
@@ -397,15 +395,71 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     const optionTexts=await page.locator('.meaning-choice').allTextContents();
     for(const text of [correctedWord.definition,...correctedWord.distractors]) assert(optionTexts.some(option=>option.includes(text)));
     const generatedWrongIndex=optionTexts.findIndex(text=>text.includes(correctedWord.distractors[0]));
-    await page.keyboard.press(String(generatedWrongIndex+1));await page.keyboard.press('Enter');
+    await page.keyboard.press(String(generatedWrongIndex+1));
     await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent.includes('Keep this meaning'));
     assert.equal((await notebook()).progress.meanings,beforeFlag.progress.meanings+1);
     await page.keyboard.press('Enter');
     await page.waitForSelector('#practice-summary:not([hidden])');
     await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
 
+    // A ten-word mixed review adds a quiz after each five scored spelling words.
+    await preferences({sentence_enabled:true,definition_enabled:false,audio_enabled:false,meaning_enabled:true,quiz_interval_mode:'fixed',quiz_interval_min:5,quiz_interval_max:5});
+    const beforeMixed=await notebook();
+    await page.locator('.nav-item[data-page="today"]').click();
+    await page.getByRole('button',{name:'Start my review',exact:true}).click();
+    for(let group=0;group<2;group++) {
+      for(let i=0;i<5;i++) {
+        assert.equal(await page.locator('#practice-mode').innerText(),'SENTENCE SPELLING');
+        const clue=await page.locator('#practice-clue').innerText();
+        const word=beforeMixed.words.find(w=>w.clue===clue);
+        assert(word,'The displayed sentence belongs to a saved word');
+        await page.locator('#answer').fill(word.word);await page.locator('#answer').press('Enter');
+        await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent.includes('Correct spelling!'));
+        await page.keyboard.press('Enter');
+      }
+      await page.waitForFunction(()=>document.querySelector('#practice-mode').textContent==='MEANING QUIZ');
+      assert(await page.locator('#answer-submit').isHidden());
+      const target=await page.locator('#practice-word').innerText();
+      const definition=(await notebook()).words.find(w=>w.word===target).definition;
+      if(group===0) await page.locator('.meaning-choice').filter({hasText:definition}).click();
+      else {
+        const index=await page.locator('.meaning-choice').evaluateAll((options,meaning)=>options.findIndex(b=>b.textContent.includes(meaning)),definition);
+        await page.keyboard.press(String(index+1));
+      }
+      await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent.includes('That’s the meaning'));
+      assert.equal((await notebook()).progress.meanings,beforeMixed.progress.meanings+group+1);
+      await page.keyboard.press('Enter');
+    }
+    await page.waitForSelector('#practice-summary:not([hidden])');
+    const afterMixed=await notebook();
+    assert.equal(afterMixed.progress.reviews,beforeMixed.progress.reviews+10);
+    await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
+
+    // Real keyboard-operated sliders persist a random [2, 7] rhythm.
+    await page.locator('.nav-item[data-page="settings"]').click();
+    await page.locator('select[name="quiz_interval_mode"]').selectOption('range');
+    await page.locator('#quiz-min').focus();await page.keyboard.press('Home');await page.keyboard.press('ArrowRight');
+    await page.locator('#quiz-max').focus();await page.keyboard.press('End');
+    for(let i=0;i<3;i++) await page.keyboard.press('ArrowLeft');
+    assert((await page.locator('#quiz-rhythm-label').innerText()).includes('2–7'));
+    if(process.env.TYPEWRITER_SCREENSHOTS) {
+      await page.locator('#quiz-rhythm').scrollIntoViewIfNeeded();
+      await page.screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'quiz-rhythm.png'),animations:'disabled'});
+      await page.setViewportSize({width:390,height:844});
+      await page.locator('#quiz-rhythm').scrollIntoViewIfNeeded();
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+      await page.screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'quiz-rhythm-mobile.png'),animations:'disabled'});
+      await page.setViewportSize({width:1360,height:1050});
+    }
+    await page.getByRole('button',{name:'Save settings',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#toast').textContent==='Settings saved.');
+    await page.reload();await page.waitForSelector('#app-content:not([hidden])');
+    assert.equal(await page.locator('select[name="quiz_interval_mode"]').inputValue(),'range');
+    assert.equal(await page.locator('#quiz-min').inputValue(),'2');
+    assert.equal(await page.locator('#quiz-max').inputValue(),'7');
+
     assert.deepEqual(errors,[]);
-    console.log('Browser checks passed: actual audio playback/replay, playback cleanup, combobox filtering and Tab completion, keyboard review corrections, ten repetitions, honest statistics, bulk entry, editing, persisted proxy settings, mobile layout, exercise filtering, automatic audio and keyboard replay, audio replacement and flagging, meaning scores, offline prompt roundtrip, failure popup and scoped fallback, meaning flags, re-evaluation controls, generated quiz options, and protected meaning correction.');
+    console.log('Browser checks passed: actual audio playback/replay, playback cleanup, combobox filtering and Tab completion, keyboard review corrections, ten repetitions, honest statistics, bulk entry, editing, persisted proxy settings, mobile layout, exercise filtering, automatic audio and keyboard replay, audio replacement and flagging, meaning scores, offline prompt roundtrip, failure popup and scoped fallback, meaning flags, re-evaluation controls, generated quiz options, protected meaning correction, immediate keyboard/click quiz answers, two quizzes alongside ten spelling words, and saved range sliders.');
   } finally {
     if(browser) await browser.close();
     server.kill('SIGTERM');

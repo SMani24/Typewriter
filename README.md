@@ -59,8 +59,23 @@ The optional starter collection includes twelve words and needs no API calls.
 
 Spelling reviews mix the enabled clue types; an exercise only includes words with the
 material it needs. Audio-only exercises show no sentence or definition. Meaning quizzes
-ask you to choose a definition (keys **1–4**, then **Enter**) and have separate scores;
+ask you to choose a definition (click or press **1–4** to answer immediately) and have separate scores;
 they do not advance spelling stages. Repeated word drills remain a separate session.
+
+Due spelling words are ordered by recent performance: the last eight unaided reviews,
+the latest mistake or use of a hint, and how overdue the word is. New words receive a
+middle priority; long-overdue words gradually catch up. Correct unaided reviews move
+through 1, 3, 7, 14, and 30-day intervals, with at most one promotion per day. A mistake
+or hint brings the word back after ten minutes. Selecting words allows an earlier review.
+Quiz questions use their own meaning results to choose words, separately from spelling.
+
+In **Settings → Exercises & sessions → Meaning quiz rhythm**, use the sliders for a
+fixed interval (five spelling words by default) or a random inclusive range such as
+**2–7**. A new random gap is drawn after each quiz. Spacing applies within each review
+session; quizzes are extra questions alongside the ten spelling words. Corrections
+don't count as another word, and unanswered skips don't count. If meaning quizzes are
+the only available exercise, the session contains quizzes throughout.
+Press **Enter** after quiz feedback when you're ready to continue.
 
 Check a pronunciation in the word editor before including it in audio-only exercises.
 Existing Cambridge recordings start unchecked. Cambridge lookups only offer audio from
