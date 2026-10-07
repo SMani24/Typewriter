@@ -51,6 +51,7 @@ Remove `~/.local/share/applications/typewriter.desktop` to remove the menu entry
 - Choose sentence spelling, spelling from a meaning, audio-only spelling, and meaning quizzes in Settings.
 - Listening exercises play automatically; **Alt+P** plays or replays audio inside a session.
 - Flag incorrect pronunciation, preview recordings, or upload your own voice in the word editor.
+- Flag a wrong meaning during practice, or select existing words and prepare them again.
 - See recall accuracy, practice activity, and recurring misspellings.
 - Export and import words and history from Settings. Repeated imports don't duplicate attempts.
 
@@ -86,10 +87,12 @@ Before generation, the app checks model metadata and caches successful checks pe
 for a day. An unavailable model does not consume a local generation-request budget.
 Model discovery and validation are metadata requests, not text-generation requests.
 
-Results are saved locally. Existing text is preserved, and unsuitable sentences are
-rejected. Sources are shown in the word editor; suggestions remain editable.
+Results are saved locally. Ordinary preparation preserves existing text; flagged meanings
+can be corrected on an explicit retry. Unsuitable sentences are rejected. Sources are shown in the word editor; suggestions remain editable.
 Failures and partial results remain visible after refreshing or restarting. Failed words
-stay queued for a manual retry. Temporary server errors receive up to two retries,
+stay queued for a manual retry. A failure popup offers **Use another LLM**, switching to
+prompt export/import for the unfinished words while preserving your connection settings.
+Temporary server errors receive up to two retries,
 with backoff and the same request budgets; retries also count as requests.
 A generation request waits up to two minutes for a response, allowing slower thinking
 models to finish; the batch status stays visible while it runs.
@@ -110,6 +113,8 @@ hand** for manual entry instead. Both options work without API keys.
 
 1. Open **Prepare with another LLM** in My words, or the export/import tool in Settings.
 2. Choose the queue or selected words and **1–100 words per file**. Download the ZIP.
+   To revisit prepared words, select them in My words and choose **Prepare again**, or
+   enable **Re-evaluate existing material** in the export dialog.
 3. Give one Markdown prompt at a time to your chosen LLM. Each includes instructions,
    vocabulary, a unique batch ID, and the exact JSON output contract.
 4. Paste the reply or open its `.json`, `.md`, or `.txt` file. Preview it, then apply it.
@@ -117,8 +122,22 @@ hand** for manual entry instead. Both options work without API keys.
 The app also accepts a Markdown reply containing one fenced JSON block. Import validates
 all entries before changing anything, rejects unexpected/duplicate words and unsuitable
 sentences, and fills empty fields while keeping your edits. Partial replies leave omitted
-words queued; repeated imports do not overwrite prepared words. Keep the same notebook
+words queued; repeated imports do not overwrite prepared words. Flagged meaning imports
+replace the definition and quiz options while preserving other saved material. Explicit
+re-evaluation replaces meanings, sentences, tips, and quiz options after preview. Replies
+exported before a newer edit or flag change are skipped. Keep the same notebook
 (database) for export and import: it records which words belong to each batch.
+
+**Wrong meaning?** during practice queues that word for correction and excludes its
+definition from meaning quizzes and definition clues. Flagging before answering lets you
+skip the question without recording an attempt. Fix it with **Prepare now**, an exported
+prompt, or a manual definition edit; the word editor also lets you clear the flag. Flagged
+meanings wait for an explicit request rather than triggering automatic API batches.
+
+Gemini and exported prompts request three plausible, clearly incorrect meanings matched
+to each word's intended sense. Quizzes use these generated options when available; older
+words use other unflagged notebook meanings until prepared again. Preview the options
+before importing; LLM suggestions still need checking.
 
 The exported prompts contain your chosen vocabulary and clues. They contain no API keys,
 proxy settings, or practice history. Export and import make no external requests.
@@ -139,7 +158,8 @@ Use **Save & test connection** to check the route; this checks connectivity, not
 Your notebook, settings, request counters, preparation results, the latest 500 log events,
 and cached audio are in **`data/`**. Logs live in SQLite alongside the notebook.
 API keys, proxy credentials, backups, and personal data are excluded from Git.
-Backups contain words, attempts, and pronunciation flags, but no keys or connection settings.
+Backups contain words, attempts, pronunciation and meaning flags, and generated quiz
+options, but no keys or connection settings.
 Uploaded recordings are not embedded in JSON backups. Copy the entire `data/` directory
 when moving your notebook and its recordings together.
 Imported Cambridge recordings need checking again before audio-only practice.

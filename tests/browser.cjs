@@ -141,8 +141,12 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.getByRole('button',{name:'Prepare selected now',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('#queue-banner').textContent.includes('missing or unsuitable fields'));
     assert((await page.locator('#toast').innerText()).includes('still need material'));
+    await page.waitForSelector('#failure-dialog[open]');
+    assert((await page.locator('#failure-message').innerText()).includes('missing or unsuitable'));
+    await page.getByRole('button',{name:'Not now',exact:true}).click();
     await page.reload();
     await page.waitForSelector('#app-content:not([hidden])');
+    assert.equal(await page.locator('#failure-dialog').evaluate(d=>d.open),false);
     assert((await page.locator('#queue-banner').innerText()).includes('missing or unsuitable fields'));
     await page.locator('.nav-item[data-page="settings"]').click();
     await page.waitForFunction(()=>document.querySelector('#app-log').textContent.includes('Preparation partial'));
@@ -181,6 +185,22 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.getByRole('button',{name:'End session',exact:true}).click();
     await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
+    // A second failed batch offers a scoped offline fallback and keeps the proxy.
+    await page.locator('.nav-item[data-page="words"]').click();
+    await page.locator('#word-search').fill('percentage');
+    await page.getByRole('checkbox',{name:'Select percentage',exact:true}).check();
+    await page.getByRole('button',{name:'Prepare selected now',exact:true}).click();
+    await page.waitForSelector('#failure-dialog[open]');
+    await page.getByRole('button',{name:'Use another LLM',exact:true}).click();
+    await page.waitForSelector('#preparation-dialog[open]');
+    assert.equal(await page.locator('#prompt-scope').inputValue(),'selected');
+    assert((await page.locator('#prompt-count').innerText()).startsWith('1 word'));
+    const fallbackState=await page.evaluate(async()=> (await fetch('/api/state')).json());
+    assert.equal(fallbackState.settings.preparation_method,'offline');
+    assert.equal(fallbackState.settings.proxy_port,10809);
+    assert.equal(fallbackState.settings.proxy_enabled,true);
+    await page.locator('[data-close="preparation-dialog"]').click();
+
     // Exercise selection, custom recordings, and API-free preparation.
     await page.setViewportSize({width:1360,height:1050});
     async function preferences(data) {
@@ -308,8 +328,64 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     assert.equal(await page.locator('input[name="offline_batch_size"]').inputValue(),'7');
     assert.equal(await page.locator('select[name="preparation_method"]').inputValue(),'offline');
 
+    // Flag a wrong meaning before answering: skip without recording an attempt.
+    await preferences({meaning_enabled:true,sentence_enabled:false,definition_enabled:false,audio_enabled:false});
+    const beforeFlag=await notebook();
+    await selectReview('necessary');
+    await page.keyboard.press('1');
+    await page.getByRole('button',{name:'Wrong meaning?',exact:true}).click();
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent.includes('flagged'));
+    assert.equal((await notebook()).progress.meanings,beforeFlag.progress.meanings);
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('#practice-summary:not([hidden])');
+    await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
+    assert.equal((await notebook()).words.find(w=>w.word==='necessary').meaning_flagged,1);
+    await page.locator('.nav-item[data-page="words"]').click();
+    await page.locator('#word-search').fill('necessary');
+    await page.getByRole('checkbox',{name:'Select necessary',exact:true}).check();
+    // Ready words can be explicitly re-evaluated; the export includes quiz options.
+    await page.getByRole('button',{name:'Prepare again',exact:true}).click();
+    await page.waitForSelector('#preparation-dialog[open]');
+    assert(await page.locator('#prompt-reevaluate').isChecked());
+    await page.locator('#prompt-reevaluate').uncheck(); // Correct just the disputed meaning.
+    const correctionDownloadEvent=page.waitForEvent('download');
+    await page.getByRole('button',{name:'Download prompt files',exact:true}).click();
+    const correctionDownload=await correctionDownloadEvent;
+    const correctionZip=path.join(directory,'correction.zip');await correctionDownload.saveAs(correctionZip);
+    const correctionPayload=JSON.parse(execFileSync(python,['-c',`import json,sys,zipfile
+with zipfile.ZipFile(sys.argv[1]) as z:
+    prompts=[z.read(n).decode() for n in z.namelist() if n!="README.md"]
+    assert len(prompts)==1
+    assert 'definition is WRONG' in prompts[0]
+    p=json.loads(prompts[0].split("\x60\x60\x60json\\n")[1].split("\\n\x60\x60\x60")[0])
+    assert p["words"][0]["word"]=="necessary"
+    p["words"][0].update(definition="Required for a particular purpose.",sentence="This change is necessary.",tip="One c, two s.",distractors=["Optional for a particular purpose.","Suitable for a particular purpose.","Available for a particular purpose."])
+    print(json.dumps(p))`,correctionZip],{encoding:'utf8'}));
+    await page.locator('#prepared-response').fill(JSON.stringify(correctionPayload));
+    await page.getByRole('button',{name:'Preview reply',exact:true}).click();
+    await page.waitForFunction(()=>!document.querySelector('#apply-preparation').disabled);
+    assert((await page.locator('#preparation-preview').innerText()).includes('Will replace: definition, distractors'));
+    await page.getByRole('button',{name:'Apply to notebook',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#preparation-preview').textContent.includes('Reply imported'));
+    const correctedWord=(await notebook()).words.find(w=>w.word==='necessary');
+    assert.equal(correctedWord.meaning_flagged,0);
+    assert.equal(correctedWord.distractors.length,3);
+    assert.equal(correctedWord.sentence,beforeFlag.words.find(w=>w.word==='necessary').sentence);
+    await page.locator('[data-close="preparation-dialog"]').click();
+    await selectReview('necessary');
+    const optionTexts=await page.locator('.meaning-choice').allTextContents();
+    for(const text of [correctedWord.definition,...correctedWord.distractors]) assert(optionTexts.some(option=>option.includes(text)));
+    const generatedWrongIndex=optionTexts.findIndex(text=>text.includes(correctedWord.distractors[0]));
+    await page.keyboard.press(String(generatedWrongIndex+1));await page.keyboard.press('Enter');
+    await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent.includes('Keep this meaning'));
+    assert.equal((await notebook()).progress.meanings,beforeFlag.progress.meanings+1);
+    await page.keyboard.press('Enter');
+    await page.waitForSelector('#practice-summary:not([hidden])');
+    await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
+
     assert.deepEqual(errors,[]);
-    console.log('Browser checks passed: actual audio playback/replay, playback cleanup, combobox filtering and Tab completion, keyboard review corrections, ten repetitions, honest statistics, bulk entry, editing, persisted proxy settings, mobile layout, exercise filtering, automatic audio and keyboard replay, audio replacement and flagging, meaning scores, and offline prompt roundtrip.');
+    console.log('Browser checks passed: actual audio playback/replay, playback cleanup, combobox filtering and Tab completion, keyboard review corrections, ten repetitions, honest statistics, bulk entry, editing, persisted proxy settings, mobile layout, exercise filtering, automatic audio and keyboard replay, audio replacement and flagging, meaning scores, offline prompt roundtrip, failure popup and scoped fallback, meaning flags, re-evaluation controls, generated quiz options, and protected meaning correction.');
   } finally {
     if(browser) await browser.close();
     server.kill('SIGTERM');
