@@ -4,6 +4,8 @@ from urllib.parse import quote, urljoin, urlparse
 from bs4 import BeautifulSoup
 from .store import clean_word, contains_word
 
+USER_AGENT = "Mozilla/5.0 (compatible; Typewriter personal dictionary lookup)"
+
 
 class Dictionary:
     def __init__(self, store, network):
@@ -17,7 +19,7 @@ class Dictionary:
         if cached:
             return {**json.loads(cached["value"]), "cached": True}
         url = "https://dictionary.cambridge.org/dictionary/english/" + quote(word.replace(" ", "-"))
-        response = self.network.request("GET", url, headers={"User-Agent": "Mozilla/5.0 (compatible; Typewriter personal dictionary lookup)"})
+        response = self.network.request("GET", url, headers={"User-Agent": USER_AGENT})
         if response.status_code != 200:
             raise ValueError("Cambridge lookup is unavailable. You can enter the meaning manually or use Gemini.")
         result = self.parse(word, response.text, url)
@@ -68,7 +70,8 @@ class Dictionary:
         import hashlib
         path = directory / (hashlib.sha256(name.encode()).hexdigest() + ".mp3")
         if not path.exists():
-            response = self.network.request("GET", url, stream=True)
+            referer = "https://dictionary.cambridge.org/dictionary/english/" + quote(word["word"].replace(" ", "-"))
+            response = self.network.request("GET", url, stream=True, headers={"User-Agent": USER_AGENT, "Referer": referer})
             try:
                 if response.status_code != 200:
                     raise ValueError("Pronunciation is unavailable right now.")

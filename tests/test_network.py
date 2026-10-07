@@ -73,6 +73,21 @@ class NetworkTests(unittest.TestCase):
         result = Dictionary.parse("necessary", html, "https://dictionary.cambridge.org/")
         self.assertEqual(result["senses"][0]["examples"], ["It is necessary."])
 
+    def test_audio_uses_network_route_and_is_cached(self):
+        word_id = self.store.add_words([{"word": "necessary"}])["added"][0]
+        self.store.edit_word(word_id, {"source": "Cambridge", "audio_url": "https://dictionary.cambridge.org/media/example.mp3"})
+        response = Mock(status_code=200)
+        response.iter_content.return_value = [b'ID3sample']
+        dictionary = Dictionary(self.store, self.network)
+        with patch.object(self.network, 'request', return_value=response) as request:
+            first = dictionary.audio(word_id)
+            second = dictionary.audio(word_id)
+        self.assertEqual(first.read_bytes(), b'ID3sample')
+        self.assertEqual(first, second)
+        self.assertEqual(request.call_count, 1)
+        self.assertIn('User-Agent', request.call_args.kwargs['headers'])
+        self.assertIn('Referer', request.call_args.kwargs['headers'])
+
     def test_no_secret_material_in_status(self):
         snapshot = json.dumps(self.enrichment.snapshot())
         for key in parse_keys(self.keys.read_text()):
