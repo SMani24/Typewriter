@@ -20,7 +20,20 @@ async function freePort() {
   const port = await freePort();
   const localPython = path.join(__dirname, '..', '.venv', 'bin', 'python');
   const python = process.env.TYPEWRITER_PYTHON || (fs.existsSync(localPython) ? localPython : 'python3');
-  const script = 'import sys; from pathlib import Path; from typewriter.web import create_app; create_app(sys.argv[1], Path(sys.argv[1])/"keys.txt", background=False).run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)';
+  const script = `import sys, wave, math, struct
+from pathlib import Path
+from flask import send_file
+from typewriter.web import create_app
+directory=Path(sys.argv[1])
+app=create_app(directory,directory/"keys.txt",background=False)
+# A synthetic tone checks actual browser decoding and playback under the app's CSP.
+# It avoids network calls and committing dictionary recordings as test assets.
+clip=directory/"test-audio.wav"
+with wave.open(str(clip),"wb") as audio:
+    audio.setparams((1,2,16000,0,"NONE","not compressed"))
+    audio.writeframes(b"".join(struct.pack("<h",int(5000*math.sin(2*math.pi*440*i/16000))) for i in range(8000)))
+app.view_functions["audio"]=lambda word_id: send_file(clip,mimetype="audio/wav")
+app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
   const server = spawn(python, ['-u', '-c', script, directory, String(port)], {cwd:path.join(__dirname, '..'), stdio:'ignore'});
   let browser;
   try {
@@ -47,10 +60,17 @@ async function freePort() {
       await page.screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'today.png'),fullPage:true,animations:'disabled'});
     }
     await page.getByRole('button',{name:'Start my review',exact:true}).click();
+    await page.getByRole('button',{name:'Listen',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#pronunciation').currentTime>0);
+    assert((await page.locator('#pronunciation').getAttribute('src')).startsWith('/api/words/'));
+    await page.waitForFunction(()=>document.querySelector('#pronunciation').ended);
+    await page.getByRole('button',{name:'Listen',exact:true}).click();
+    await page.waitForFunction(()=>!document.querySelector('#pronunciation').paused && document.querySelector('#pronunciation').currentTime>0);
     await page.locator('#answer').fill('neccessary');
     await page.locator('#answer').press('Enter');
     await page.waitForSelector('.letter-diff');
     await page.locator('#answer-submit').click();
+    assert(await page.locator('#pronunciation').evaluate(audio=>audio.paused && !audio.hasAttribute('src')));
     assert.equal(await page.locator('#practice-word').innerText(),'necessary');
     await page.locator('#answer').fill('necessary');
     await page.locator('#answer').press('Enter');
@@ -61,6 +81,18 @@ async function freePort() {
 
     await page.locator('.nav-item[data-page="words"]').click();
     await page.getByRole('button',{name:'Drill necessary',exact:true}).click();
+    await page.locator('#drill-search').fill('NEC');
+    assert.equal(await page.locator('#drill-word option').count(),1);
+    assert.equal(await page.locator('#drill-word option').innerText(),'necessary');
+    await page.locator('#drill-search').fill('ary');
+    assert.equal(await page.locator('#drill-word option').innerText(),'necessary');
+    await page.locator('#drill-search').fill('zzz-no-match');
+    assert(await page.getByRole('button',{name:'Begin drill',exact:true}).isDisabled());
+    assert.equal(await page.locator('#drill-word option').innerText(),'No matching words');
+    await page.locator('#drill-search').fill('');
+    assert.equal(await page.locator('#drill-word option').count(),12);
+    assert(await page.getByRole('button',{name:'Begin drill',exact:true}).isEnabled());
+    await page.locator('#drill-search').fill('necessary');
     await page.locator('#drill-target').selectOption('10');
     await page.getByRole('button',{name:'Begin drill',exact:true}).click();
     for(let n=0;n<10;n++) {
@@ -110,7 +142,7 @@ async function freePort() {
     await page.getByRole('button',{name:'End session',exact:true}).click();
     await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
     assert.deepEqual(errors,[]);
-    console.log('Browser checks passed: review corrections, ten repetitions, honest statistics, bulk entry, editing, persisted proxy settings, and mobile layout.');
+    console.log('Browser checks passed: actual audio playback/replay, playback cleanup, searchable drills, review corrections, ten repetitions, honest statistics, bulk entry, editing, persisted proxy settings, and mobile layout.');
   } finally {
     if(browser) await browser.close();
     server.kill('SIGTERM');

@@ -26,7 +26,7 @@ const paths = {
 };
 const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.book}</svg>`;
 function hydrateIcons(root = document) { $$('[data-icon]', root).forEach(el => el.innerHTML = icon(el.dataset.icon)); }
-let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer, drillTimer;
+let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer, drillTimer, audioSequence = 0;
 const token = $('meta[name="typewriter-token"]').content;
 
 async function api(path, method = 'GET', data) {
@@ -223,9 +223,20 @@ async function addStarter() {
 }
 function chooseDrill(id) {
   if (!state.words.length) {openWord();toast('Add a word to start your first drill.');return;}
-  $('#drill-word').innerHTML = [...state.words].sort((a,b) => a.word.localeCompare(b.word)).map(w => `<option value="${w.id}">${escapeHtml(w.word)}</option>`).join('');
-  if (id) $('#drill-word').value = id;
+  $('#drill-search').value = '';
+  filterDrillWords(id);
   $('#drill-dialog').showModal();
+  if (!id) setTimeout(() => $('#drill-search').focus(),20);
+}
+function filterDrillWords(preferredId) {
+  const query = $('#drill-search').value.trim().toLowerCase();
+  const selectedId = preferredId || Number($('#drill-word').value);
+  const words = state.words.filter(w => w.word.toLowerCase().includes(query)).sort((a,b) => a.word.localeCompare(b.word));
+  $('#drill-word').innerHTML = words.length ? words.map(w => `<option value="${w.id}">${escapeHtml(w.word)}</option>`).join('') : '<option value="">No matching words</option>';
+  if (words.some(w => w.id === selectedId)) $('#drill-word').value = selectedId;
+  $('#drill-word').disabled = words.length === 0;
+  $('#drill-form button[type="submit"]').disabled = words.length === 0;
+  $('#drill-match-count').textContent = words.length ? `${words.length} ${query ? 'matching ' : ''}word${words.length === 1 ? '' : 's'}` : 'No matches. Try a different spelling or clear the search.';
 }
 function startReview(ids) {
   let words = ids ? state.words.filter(w => ids.includes(w.id)) : dueWords().slice(0,10);
@@ -254,6 +265,7 @@ function currentWord() {return practice.queue[practice.mode === 'drill' ? 0 : pr
 function concealed(word, text) {return String(text || '').replace(new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'),'________');}
 function renderPractice() {
   clearTimeout(drillTimer);
+  stopPronunciation();
   const word = currentWord(), drill = practice.mode === 'drill';
   practice.feedback = false; practice.hinted = false; practice.wordStarted = Date.now();
   $('#practice-mode').textContent = drill ? 'WORD DRILL · FIND YOUR RHYTHM' : 'DAILY REVIEW · ONE WORD AT A TIME';
@@ -314,6 +326,7 @@ async function answerSubmit(event) {
 }
 function finishPractice() {
   clearTimeout(drillTimer);
+  stopPronunciation();
   if (!practice) return;
   const p = practice, minutes = Math.max(1,Math.round((Date.now()-p.started)/60000));
   $('#practice-active').hidden = true; $('#practice-summary').hidden = false;
@@ -321,16 +334,33 @@ function finishPractice() {
   $('#practice-summary').innerHTML = `<div class="practice-summary"><div class="summary-mark">✳</div><span class="eyebrow">A LITTLE PROGRESS, MADE</span><h2>${p.mode === 'drill' ? 'A word, a little more familiar.' : 'You showed up for your words.'}</h2><p>${p.mode === 'drill' ? 'Your repetitions are saved. Come back later to check what you remember.' : 'Every attempt gives your next review a little more direction.'}</p><div class="summary-stats"><div><strong>${p.attempts}</strong><span>${p.mode === 'drill' ? 'repetitions' : 'review attempts'}</span></div><div><strong>${p.correct}</strong><span>correct answers</span></div><div><strong>${minutes}</strong><span>minutes of focus</span></div></div><button class="button primary" data-action="close-practice">Back to my notebook${icon('arrow')}</button></div>`;
   guarded(refresh);
 }
-async function listen(button) {
+function stopPronunciation() {
+  audioSequence++;
+  const audio = $('#pronunciation');
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.load();
+}
+async function listen() {
   if (!practice) return;
   const id = currentWord().id;
-  // Fetch from our backend so pronunciation follows the configured proxy too.
-  const response = await fetch(`/api/words/${id}/audio`);
-  if (!response.ok) {const result = await response.json();throw new Error(result.error || 'Pronunciation is unavailable.');}
-  const url = URL.createObjectURL(await response.blob()), audio = new Audio(url);
-  audio.addEventListener('ended',() => URL.revokeObjectURL(url),{once:true});
-  audio.addEventListener('error',() => URL.revokeObjectURL(url),{once:true});
-  try {await audio.play();} catch {URL.revokeObjectURL(url);throw new Error('Your browser could not play this pronunciation.');}
+  const sequence = ++audioSequence, audio = $('#pronunciation');
+  const url = `/api/words/${id}/audio`;
+  audio.pause();
+  // Play directly from our own server. Blob URLs were blocked by media-src 'self'.
+  // Starting play before awaiting also keeps it attached to the user's click.
+  // Cambridge downloads still pass through the Python server's configured proxy.
+  audio.src = url;
+  try {await audio.play();}
+  catch (error) {
+    if (sequence !== audioSequence || error.name === 'AbortError') return;
+    if (error.name === 'NotAllowedError') throw new Error('Your browser blocked playback. Allow sound for Typewriter and click Listen again.');
+    // Recover the server's useful lookup/proxy error when a media request failed.
+    const response = await fetch(url);
+    if (sequence !== audioSequence) return;
+    if (!response.ok) {const result = await response.json();throw new Error(result.error || 'Pronunciation is unavailable.');}
+    throw new Error('This pronunciation could not be played. Try another word or browser.');
+  }
 }
 async function prepare(ids) {
   const result = await api('/enrichment/run','POST',ids ? {ids} : {});
@@ -349,7 +379,7 @@ const actions = {
   hint:() => {if (!practice) return;practice.hinted = true;$('#practice-word').textContent = currentWord().word;$('#hint-button').hidden = true;$('#practice-label').textContent = 'LOOK, REMEMBER, THEN TYPE';$('#answer').focus();},
   listen,
   'finish-practice':() => {if ($('#practice-summary').hidden) finishPractice();else actions['close-practice']();},
-  'close-practice':() => {clearTimeout(drillTimer);$('#practice-dialog').close();practice = null;},
+  'close-practice':() => {clearTimeout(drillTimer);stopPronunciation();$('#practice-dialog').close();practice = null;},
 };
 document.addEventListener('click',event => {
   const page = event.target.closest('[data-page]');if (page) {navigate(page.dataset.page);return;}
@@ -367,6 +397,7 @@ $('#select-all').addEventListener('change',event => {visibleWords().forEach(w =>
 $('#word-search').addEventListener('input',renderLibrary);
 $('#word-form').addEventListener('submit',saveWord);
 $('#drill-form').addEventListener('submit',startDrill);
+$('#drill-search').addEventListener('input',() => filterDrillWords());
 $('#answer-form').addEventListener('submit',answerSubmit);
 $('#dictionary-sense').addEventListener('change',applyDictionarySense);
 $('#dictionary-example').addEventListener('change',() => {$('#word-form').elements.sentence.value = $('#dictionary-example').value;});

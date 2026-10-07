@@ -45,7 +45,7 @@ Remove `~/.local/share/applications/typewriter.desktop` to remove the menu entry
 - Add individual words with manual clues, or paste a list of words.
 - Look up meanings, exact-word examples, and UK/US audio in Cambridge Dictionary.
 - Ask Gemini to fill missing meanings, sentences, and spelling tips in batches.
-- Drill one word for 10, 20, or 50 correct repetitions, or practise without a target.
+- Search your word list, then drill a word for 10, 20, or 50 correct repetitions, or practise without a target.
 - Review due words, or select a set for extra practice.
 - See recall accuracy, practice activity, and recurring misspellings.
 - Export and import words and history from Settings. Repeated imports don't duplicate attempts.
