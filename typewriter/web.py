@@ -101,6 +101,10 @@ def create_app(data_dir=None, keys_path=None, background=True):
         store.delete_word(word_id)
         return jsonify(ok=True)
 
+    @app.patch("/api/words/<int:word_id>/meaning")
+    def meaning_settings(word_id):
+        return jsonify(store.set_meaning_flag(word_id, body().get("flagged")))
+
     @app.post("/api/words/<int:word_id>/attempts")
     def attempt(word_id):
         return jsonify(store.attempt(word_id, body()))
@@ -190,7 +194,7 @@ def create_app(data_dir=None, keys_path=None, background=True):
     @app.post("/api/preparation/export")
     def export_preparation():
         data = body()
-        stream, name = preparation.export(data.get("ids"), data.get("size"))
+        stream, name = preparation.export(data.get("ids"), data.get("size"), data.get("re_evaluate", False))
         return send_file(stream, mimetype="application/zip", as_attachment=True, download_name=name)
 
     @app.post("/api/preparation/preview")

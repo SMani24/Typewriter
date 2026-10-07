@@ -44,6 +44,15 @@ def contains_word(word, sentence):
     return bool(re.search(r"(?<!\w)" + re.escape(word) + r"(?!\w)", sentence, re.I))
 
 
+def validate_distractors(values, definition):
+    if not isinstance(values, list) or len(values) != 3 or any(not isinstance(v, str) or not v.strip() or len(v) > 500 for v in values):
+        raise ValueError("Quiz options need three different, nonempty meanings (up to 500 characters each).")
+    values = [v.strip() for v in values]
+    if len({v.casefold() for v in [definition.strip(), *values]}) != 4:
+        raise ValueError("Quiz options must differ from each other and the correct meaning.")
+    return values
+
+
 class Store:
     def __init__(self, path):
         self.path = Path(path)
@@ -79,7 +88,7 @@ class Store:
                 );
             """)
             columns = {r["name"] for r in db.execute("PRAGMA table_info(words)")}
-            for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''"}.items():
+            for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''", "meaning_flagged": "INTEGER NOT NULL DEFAULT 0", "distractors": "TEXT NOT NULL DEFAULT '[]'"}.items():
                 if name not in columns:
                     db.execute(f"ALTER TABLE words ADD COLUMN {name} {definition}")
 
@@ -162,6 +171,7 @@ class Store:
             for row in rows:
                 w = dict(row)
                 w["sources"] = json.loads(w["sources"])
+                w["distractors"] = json.loads(w["distractors"])
                 w["audio_eligible"] = bool(w["audio_verified"] and not w["audio_flagged"] and (w["audio_file"] or w["audio_url"]))
                 w["clue"] = blank_sentence(w["word"], w["sentence"]) if contains_word(w["word"], w["sentence"]) else ""
                 w["accuracy"] = round(100 * w["correct_reviews"] / w["reviews"]) if w["reviews"] else None
@@ -211,6 +221,8 @@ class Store:
             raise KeyError("Word not found.")
         item = self.validate_word({**original, **{k: v for k, v in data.items() if k in ["definition", "sentence", "tip", "tag"]}})
         sources = original["sources"]
+        if item["definition"] != original["definition"]:
+            sources.pop("distractors", None)
         for field in ["definition", "sentence", "tip"]:
             if field in data and (item[field] != original[field] or data.get("source") == "Cambridge" and field in ["definition", "sentence"]):
                 sources[field] = "Cambridge" if data.get("source") == "Cambridge" and field in ["definition", "sentence"] else "manual"
@@ -220,6 +232,8 @@ class Store:
         status = "ready" if all(item[k] for k in ["definition", "sentence", "tip"]) else "pending"
         with self.db() as db:
             db.execute("UPDATE words SET definition=?,sentence=?,tip=?,tag=?,sources=?,audio_url=?,updated=?,status=?,enrichment_error='',version=version+1 WHERE id=?", (item["definition"], item["sentence"], item["tip"], item["tag"], json.dumps(sources), audio, now(), status, word_id))
+            if item["definition"] != original["definition"]:
+                db.execute("UPDATE words SET meaning_flagged=0,distractors='[]' WHERE id=?", (word_id,))
         if audio != original["audio_url"] and not original["audio_file"]:
             with self.db() as db:
                 db.execute("UPDATE words SET audio_verified=0 WHERE id=?", (word_id,))
@@ -243,28 +257,63 @@ class Store:
                 db.execute("UPDATE words SET " + ",".join(k + "=?" for k in updates) + " WHERE id=?", (*updates.values(), word_id))
         return self.word(word_id)
 
-    def enrich_word(self, word_id, content, source):
+    def set_meaning_flag(self, word_id, flagged):
+        if not isinstance(flagged, bool):
+            raise ValueError("Choose an on/off meaning flag.")
         with self.db() as db:
-            row = db.execute("SELECT * FROM words WHERE id=?", (word_id,)).fetchone()
-            return self.enrich_row(db, row, content, source) if row else False
+            if not db.execute("SELECT id FROM words WHERE id=?", (word_id,)).fetchone():
+                raise KeyError("Word not found.")
+            db.execute("UPDATE words SET meaning_flagged=?,version=version+1,updated=?,enrichment_error='' WHERE id=?", (int(flagged), now(), word_id))
+        self.log("info", "Meaning flagged for correction." if flagged else "Meaning flag cleared.")
+        return self.word(word_id)
 
     @staticmethod
-    def enrich_row(db, row, content, source):
+    def replacement_fields(row, snapshot):
+        if not snapshot or row["version"] != snapshot.get("version") or ("created" in snapshot and row["created"] != snapshot["created"]):
+            return []
+        if snapshot.get("kind") == "review":
+            return ["definition", "sentence", "tip", "distractors"]
+        if snapshot.get("kind") == "meaning" and row["meaning_flagged"]:
+            return ["definition", "distractors"]
+        return []
+
+    def enrich_word(self, word_id, content, source, replacement=None):
+        with self.db() as db:
+            row = db.execute("SELECT * FROM words WHERE id=?", (word_id,)).fetchone()
+            return self.enrich_row(db, row, content, source, replacement) if row else False
+
+    @staticmethod
+    def enrich_row(db, row, content, source, replacement=None):
         # Read at commit time so material typed during preparation is preserved.
         item = dict(row)
         sources = json.loads(item["sources"])
+        replace = Store.replacement_fields(row, replacement)
+        if replacement and not replace:
+            return row["status"] == "ready" and not row["meaning_flagged"]
         for field in ["definition", "sentence", "tip"]:
             value = content.get(field, "")
             if not isinstance(value, str) or not value.strip() or len(value) > 2000:
                 continue
             if field == "sentence" and not contains_word(item["word"], value):
                 continue
-            if not item[field]:
+            if not item[field] or field in replace:
                 item[field] = value.strip()
                 sources[field] = source
+                if field == "definition":
+                    item["meaning_flagged"] = 0
+                    item["distractors"] = "[]"
+                    sources.pop("distractors", None)
+        # Options are tied to the saved definition, never to a discarded meaning.
+        if content.get("distractors") is not None and isinstance(content.get("definition"), str) and item["definition"] == content["definition"].strip() and (not json.loads(item["distractors"]) or "distractors" in replace):
+            try:
+                item["distractors"] = json.dumps(validate_distractors(content["distractors"], item["definition"]))
+                sources["distractors"] = source
+            except ValueError:
+                pass
         status = "ready" if all(item[k] for k in ["definition", "sentence", "tip"]) else "pending"
-        db.execute("UPDATE words SET definition=?,sentence=?,tip=?,sources=?,updated=?,status=?,enrichment_error='' WHERE id=?", (item["definition"], item["sentence"], item["tip"], json.dumps(sources), now(), status, item["id"]))
-        return status == "ready"
+        changed = any(item[k] != row[k] for k in ("definition", "sentence", "tip", "distractors", "meaning_flagged"))
+        db.execute("UPDATE words SET definition=?,sentence=?,tip=?,distractors=?,meaning_flagged=?,sources=?,updated=?,status=?,enrichment_error='',version=version+? WHERE id=?", (item["definition"], item["sentence"], item["tip"], item["distractors"], item["meaning_flagged"], json.dumps(sources), now(), status, int(changed), item["id"]))
+        return status == "ready" and not item["meaning_flagged"]
 
     def delete_word(self, word_id):
         with self.db() as db:
@@ -286,12 +335,19 @@ class Store:
             if not row:
                 raise KeyError("Word not found.")
             if mode == "meaning":
-                try:
-                    chosen = int(answer)
-                except ValueError:
-                    raise ValueError("Choose a meaning first.") from None
-                choice = db.execute("SELECT definition FROM words WHERE id=?", (chosen,)).fetchone()
-                if not choice or not row["definition"]:
+                if "version" in data and data["version"] != row["version"]:
+                    raise ValueError("This word changed during practice. Start a new session.")
+                if re.fullmatch(r"distractor:[0-2]", answer):
+                    options = json.loads(row["distractors"])
+                    index = int(answer[-1])
+                    choice = {"definition": options[index]} if index < len(options) else None
+                else:
+                    try:
+                        chosen = int(answer)
+                    except ValueError:
+                        raise ValueError("Choose a meaning first.") from None
+                    choice = db.execute("SELECT definition FROM words WHERE id=? AND meaning_flagged=0", (chosen,)).fetchone()
+                if not choice or not row["definition"] or row["meaning_flagged"]:
                     raise ValueError("This meaning is no longer available. Start a new session.")
                 correct = choice["definition"].strip().lower() == row["definition"].strip().lower()
             else:
@@ -326,6 +382,8 @@ class Store:
         with self.db() as db:
             words = [dict(r) for r in db.execute("SELECT * FROM words")]
             attempts = [dict(r) for r in db.execute("SELECT * FROM attempts")]
+        for word in words:
+            word["distractors"] = json.loads(word["distractors"])
         return {"format": "typewriter", "version": 1, "exported": now(), "words": words, "attempts": attempts}
 
     def import_backup(self, data):
@@ -355,6 +413,13 @@ class Store:
                 raise ValueError("Invalid review stage.")
             if w.get("audio_flagged", 0) not in (0, 1):
                 raise ValueError("Invalid pronunciation flag in backup.")
+            if w.get("meaning_flagged", 0) not in (0, 1):
+                raise ValueError("Invalid meaning flag in backup.")
+            options = w.get("distractors", [])
+            if not isinstance(options, list):
+                raise ValueError("Invalid quiz options in backup.")
+            if options:
+                validate_distractors(options, item["definition"])
             audio_url = w.get("audio_url", "")
             if not isinstance(audio_url, str) or audio_url and not re.fullmatch(r"https://dictionary\.cambridge\.org/[^\s]+", audio_url):
                 raise ValueError("Invalid pronunciation URL in backup.")
@@ -376,6 +441,7 @@ class Store:
                 status = "ready" if all(item[k] for k in ["definition", "sentence", "tip"]) else "pending"
                 cur = db.execute("INSERT INTO words (word,definition,sentence,tip,tag,sources,created,updated,due,stage,status) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (item["word"], item["definition"], item["sentence"], item["tip"], item["tag"], json.dumps({k: "imported" for k in ["definition", "sentence", "tip"] if item[k]}), original["created"], original["updated"], original["due"], original["stage"], status))
                 db.execute("UPDATE words SET audio_flagged=?,audio_url=? WHERE id=?", (original.get("audio_flagged", 0), original.get("audio_url", ""), cur.lastrowid))
+                db.execute("UPDATE words SET meaning_flagged=?,distractors=? WHERE id=?", (original.get("meaning_flagged", 0), json.dumps(original.get("distractors", [])), cur.lastrowid))
                 id_map[original["id"]] = cur.lastrowid
                 added += 1
             for a in attempts:
