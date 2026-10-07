@@ -25,7 +25,10 @@ from pathlib import Path
 from flask import send_file
 from typewriter.web import create_app
 directory=Path(sys.argv[1])
+(directory/"keys.txt").write_text("fake-browser-key-no-network-calls")
 app=create_app(directory,directory/"keys.txt",background=False)
+# An empty provider result checks that partial failures remain visible.
+app.extensions["enrichment"].generate=lambda words: {}
 # A synthetic tone checks actual browser decoding and playback under the app's CSP.
 # It avoids network calls and committing dictionary recordings as test assets.
 clip=directory/"test-audio.wav"
@@ -69,37 +72,49 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.locator('#answer').fill('neccessary');
     await page.locator('#answer').press('Enter');
     await page.waitForSelector('.letter-diff');
-    await page.locator('#answer-submit').click();
+    await page.keyboard.press('Enter');
     assert(await page.locator('#pronunciation').evaluate(audio=>audio.paused && !audio.hasAttribute('src')));
     assert.equal(await page.locator('#practice-word').innerText(),'necessary');
     await page.locator('#answer').fill('necessary');
     await page.locator('#answer').press('Enter');
     await page.waitForFunction(()=>document.querySelector('#answer-submit').textContent.includes('Next word'));
-    await page.locator('#answer-submit').click();
+    await page.keyboard.press('Enter');
     await page.getByRole('button',{name:'End session',exact:true}).click();
     await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
 
     await page.locator('.nav-item[data-page="words"]').click();
     await page.getByRole('button',{name:'Drill necessary',exact:true}).click();
     await page.locator('#drill-search').fill('NEC');
-    assert.equal(await page.locator('#drill-word option').count(),1);
-    assert.equal(await page.locator('#drill-word option').innerText(),'necessary');
+    assert.equal(await page.locator('#drill-options [role="option"]').count(),1);
+    assert.equal((await page.locator('#drill-options [role="option"]').innerText()).split('\n')[0],'necessary');
+    assert.equal(await page.locator('#drill-completion').innerText(),'essary');
+    if(process.env.TYPEWRITER_SCREENSHOTS) await page.screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'picker.png'),animations:'disabled'});
+    await page.locator('#drill-search').press('Tab');
+    assert.equal(await page.locator('#drill-search').inputValue(),'necessary');
+    assert.equal(await page.locator('#drill-search').getAttribute('aria-expanded'),'false');
+    assert(await page.locator('#drill-search').evaluate(el=>el===document.activeElement));
     await page.locator('#drill-search').fill('ary');
-    assert.equal(await page.locator('#drill-word option').innerText(),'necessary');
+    assert.equal((await page.locator('#drill-options [role="option"]').innerText()).split('\n')[0],'necessary');
+    assert.equal(await page.locator('#drill-completion').innerText(),'');
     await page.locator('#drill-search').fill('zzz-no-match');
     assert(await page.getByRole('button',{name:'Begin drill',exact:true}).isDisabled());
-    assert.equal(await page.locator('#drill-word option').innerText(),'No matching words');
+    assert.equal(await page.locator('#drill-options').innerText(),'No matching words');
     await page.locator('#drill-search').fill('');
-    assert.equal(await page.locator('#drill-word option').count(),12);
-    assert(await page.getByRole('button',{name:'Begin drill',exact:true}).isEnabled());
+    assert.equal(await page.locator('#drill-options [role="option"]').count(),12);
+    await page.locator('#drill-search').press('ArrowDown');
+    assert.equal(await page.locator('#drill-search').getAttribute('aria-activedescendant'),await page.locator('#drill-options [role="option"]').nth(1).getAttribute('id'));
+    await page.locator('#drill-search').press('Escape');
+    assert(await page.locator('#drill-dialog').evaluate(el=>el.open));
+    assert.equal(await page.locator('#drill-search').getAttribute('aria-expanded'),'false');
     await page.locator('#drill-search').fill('necessary');
+    await page.locator('#drill-search').press('Enter');
     await page.locator('#drill-target').selectOption('10');
     await page.getByRole('button',{name:'Begin drill',exact:true}).click();
     for(let n=0;n<10;n++) {
       await page.waitForFunction(()=>!document.querySelector('#answer').disabled);
       await page.locator('#answer').fill('necessary');
       await page.locator('#answer').press('Enter');
-      if(n<9) await page.waitForFunction(count=>document.querySelector('#practice-count').textContent.startsWith(String(count)),n+1);
+      if(n<9) {await page.waitForFunction(()=>document.querySelector('#answer-submit').textContent.includes('Type it again'));await page.keyboard.press('Enter');}
     }
     await page.waitForSelector('#practice-summary:not([hidden])');
     await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
@@ -123,26 +138,51 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.getByRole('button',{name:'Save changes',exact:true}).click();
     await page.waitForFunction(()=>!document.querySelector('#word-dialog').open);
 
+    await page.getByRole('button',{name:'Prepare selected now',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#queue-banner').textContent.includes('missing or unsuitable fields'));
+    assert((await page.locator('#toast').innerText()).includes('still need material'));
+    await page.reload();
+    await page.waitForSelector('#app-content:not([hidden])');
+    assert((await page.locator('#queue-banner').innerText()).includes('missing or unsuitable fields'));
     await page.locator('.nav-item[data-page="settings"]').click();
+    await page.waitForFunction(()=>document.querySelector('#app-log').textContent.includes('Preparation partial'));
     await page.locator('label.switch').filter({has:page.locator('input[name="proxy_enabled"]')}).click();
     await page.locator('input[name="proxy_port"]').fill('10809');
+    await page.locator('input[name="review_enabled"]').uncheck();
     await page.getByRole('button',{name:'Save settings',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('#toast').textContent==='Settings saved.');
     await page.reload();
     await page.waitForSelector('#app-content:not([hidden])');
     assert.equal(await page.locator('input[name="proxy_port"]').inputValue(),'10809');
     assert(await page.locator('input[name="proxy_enabled"]').isChecked());
+    assert.equal(await page.locator('input[name="review_enabled"]').isChecked(),false);
+    await page.locator('.nav-item[data-page="today"]').click();
+    assert.equal(await page.getByRole('button',{name:'Start my review',exact:true}).count(),0);
+    assert.equal(await page.getByRole('button',{name:'Start a word drill',exact:true}).count(),1);
+    await page.locator('.nav-item[data-page="settings"]').click();
+    await page.locator('input[name="review_enabled"]').check();
+    await page.locator('input[name="drill_enabled"]').uncheck();
+    await page.getByRole('button',{name:'Save settings',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('.drill-card').hidden);
+    await page.locator('.nav-item[data-page="words"]').click();
+    assert.equal(await page.getByRole('button',{name:'Drill percentage',exact:true}).count(),0);
+    await page.locator('.nav-item[data-page="settings"]').click();
+    await page.locator('input[name="drill_enabled"]').check();
+    await page.getByRole('button',{name:'Save settings',exact:true}).click();
+    await page.waitForFunction(()=>!document.querySelector('.drill-card').hidden);
 
     await page.setViewportSize({width:390,height:844});
     await page.locator('.nav-item[data-page="today"]').click();
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.getByRole('button',{name:'Start a word drill',exact:true}).click();
+    await page.locator('#drill-search').fill('necessary');
+    await page.locator('#drill-search').press('Enter');
     await page.getByRole('button',{name:'Begin drill',exact:true}).click();
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.getByRole('button',{name:'End session',exact:true}).click();
     await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
     assert.deepEqual(errors,[]);
-    console.log('Browser checks passed: actual audio playback/replay, playback cleanup, searchable drills, review corrections, ten repetitions, honest statistics, bulk entry, editing, persisted proxy settings, and mobile layout.');
+    console.log('Browser checks passed: actual audio playback/replay, playback cleanup, combobox filtering and Tab completion, keyboard review corrections, ten repetitions, honest statistics, bulk entry, editing, persisted proxy settings, and mobile layout.');
   } finally {
     if(browser) await browser.close();
     server.kill('SIGTERM');

@@ -26,7 +26,7 @@ const paths = {
 };
 const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.book}</svg>`;
 function hydrateIcons(root = document) { $$('[data-icon]', root).forEach(el => el.innerHTML = icon(el.dataset.icon)); }
-let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer, drillTimer, audioSequence = 0;
+let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer, drillTimer, audioSequence = 0, answerBusy = false, drillMatches = [], drillHighlight = 0;
 const token = $('meta[name="typewriter-token"]').content;
 
 async function api(path, method = 'GET', data) {
@@ -45,10 +45,13 @@ function toast(message, error = false) {
 async function guarded(action, button) {
   if (button) button.disabled = true;
   try { return await action(); } catch (error) { toast(error.message || 'Please try again.', true); }
-  finally { if (button) button.disabled = false; }
+  finally { if (button) button.disabled = !!(state?.enrichment.busy && ['prepare-all','prepare-selected'].includes(button.dataset.action)); }
 }
 async function refresh() {
+  const previousJob = state?.enrichment;
   state = await api('/state');
+  const job = state.enrichment;
+  if (previousJob && job.id && !job.busy && job.status !== 'idle' && (previousJob.busy || previousJob.id !== job.id)) toast(job.error ? `${job.message} ${job.error}` : job.message, !!job.error);
   selected = new Set([...selected].filter(id => state.words.some(w => w.id === id)));
   $('#loading').hidden = true;
   $('#app-content').hidden = false;
@@ -90,6 +93,7 @@ function render() {
   renderProgress();
   renderQueue();
   renderKeys();
+  renderPracticeModes();
 }
 function visibleWords() {
   const query = $('#word-search').value.toLowerCase().trim();
@@ -102,12 +106,27 @@ function renderLibrary() {
   $('#selection-count').textContent = `${selected.size} word${selected.size === 1 ? '' : 's'} selected`;
   $('#select-all').checked = words.length > 0 && words.every(w => selected.has(w.id));
   $('#select-all').indeterminate = words.some(w => selected.has(w.id)) && !$('#select-all').checked;
+  renderPracticeModes();
 }
 function renderQueue() {
   const job = state.enrichment;
-  $('#queue-banner').classList.toggle('busy', job.busy);
-  $('#queue-banner').innerHTML = `${icon('spark')}<div><span>${job.busy ? escapeHtml(job.message) : job.pending ? `${job.pending} word${job.pending === 1 ? '' : 's'} waiting to be prepared` : 'Your words are ready when you are.'}</span><p>${job.error ? escapeHtml(job.error) : job.busy ? 'You can keep practising while this runs.' : job.pending ? `Automatic preparation waits for ${state.settings.batch_size} words. Select a set or prepare the queue now.` : 'Meanings, sentences, and tips can always be edited.'}</p></div>${job.pending ? `<button class="text-button" data-action="prepare-all" ${job.busy ? 'disabled' : ''}>Prepare now${icon('arrow')}</button>` : ''}`;
-  $('#settings-pending').textContent = job.error || (job.busy ? job.message : `${job.pending} words queued`);
+  const message = job.busy || job.total ? job.message : job.pending ? `${job.pending} words waiting to be prepared` : 'Your words are ready when you are.';
+  const detail = job.error || (job.busy ? 'You can keep practising while this runs.' : job.pending ? `${job.pending} words queued. Prepare a set now, or wait for an automatic batch of ${state.settings.batch_size}.` : 'Meanings, sentences, and tips can always be edited.');
+  const content = `${icon('spark')}<div><span>${escapeHtml(message)}</span><p>${escapeHtml(detail)}</p></div>${job.pending ? `<button class="text-button" data-action="prepare-all" ${job.busy ? 'disabled' : ''}>Prepare now${icon('arrow')}</button>` : ''}`;
+  for (const el of [$('#queue-banner'), $('#today-preparation')]) {
+    el.classList.toggle('busy', job.busy);
+    el.classList.toggle('failed', !!job.error);
+    el.innerHTML = content;
+  }
+  $('#today-preparation').hidden = !job.busy && !job.error && !job.total;
+  $('#settings-pending').textContent = `${job.message}${job.error ? ' ' + job.error : ''}`;
+  $$('[data-action="prepare-all"], [data-action="prepare-selected"]').forEach(b => b.disabled = job.busy || !job.pending);
+  $('#app-log').innerHTML = state.logs.length ? state.logs.map(r => `<div class="log-entry ${escapeHtml(r.level)}"><time>${escapeHtml(new Date(r.created).toLocaleString())}</time><span>${escapeHtml(r.message)}</span></div>`).join('') : '<p class="muted small">No events yet. Preparation results will appear here.</p>';
+}
+function renderPracticeModes() {
+  $$('[data-action="review"], [data-action="review-selected"]').forEach(b => b.hidden = !state.settings.review_enabled);
+  $('.drill-card').hidden = !state.settings.drill_enabled;
+  $$('[data-drill]').forEach(b => b.hidden = !state.settings.drill_enabled);
 }
 function renderProgress() {
   const p = state.progress;
@@ -131,7 +150,7 @@ function renderKeys() {
 }
 function settingsPayload() {
   const form = $('#settings-form'), result = {};
-  ['proxy_enabled','auto_ai','clear_proxy_password'].forEach(k => result[k] = form.elements[k].checked);
+  ['proxy_enabled','auto_ai','review_enabled','drill_enabled','clear_proxy_password'].forEach(k => result[k] = form.elements[k].checked);
   ['proxy_type','proxy_host','proxy_username','proxy_password','model'].forEach(k => result[k] = form.elements[k].value.trim());
   ['proxy_port','batch_size','daily_budget','requests_per_minute'].forEach(k => result[k] = Number(form.elements[k].value));
   return result;
@@ -222,23 +241,52 @@ async function addStarter() {
   toast(result.added.length ? `${result.added.length} starter words added. No API calls needed.` : 'The starter words are already in your notebook.');
 }
 function chooseDrill(id) {
+  if (!state.settings.drill_enabled) return;
   if (!state.words.length) {openWord();toast('Add a word to start your first drill.');return;}
-  $('#drill-search').value = '';
-  filterDrillWords(id);
+  $('#drill-search').value = id ? state.words.find(w => w.id === id).word : '';
+  $('#drill-word').value = id || '';
+  filterDrillWords();
   $('#drill-dialog').showModal();
-  if (!id) setTimeout(() => $('#drill-search').focus(),20);
+  setTimeout(() => {$('#drill-search').focus();$('#drill-search').select();},20);
 }
-function filterDrillWords(preferredId) {
+function showDrillOptions(open) {
+  $('#drill-options').hidden = !open;
+  $('#drill-search').setAttribute('aria-expanded', String(open));
+  if (!open) $('#drill-search').removeAttribute('aria-activedescendant');
+}
+function filterDrillWords() {
   const query = $('#drill-search').value.trim().toLowerCase();
-  const selectedId = preferredId || Number($('#drill-word').value);
-  const words = state.words.filter(w => w.word.toLowerCase().includes(query)).sort((a,b) => a.word.localeCompare(b.word));
-  $('#drill-word').innerHTML = words.length ? words.map(w => `<option value="${w.id}">${escapeHtml(w.word)}</option>`).join('') : '<option value="">No matching words</option>';
-  if (words.some(w => w.id === selectedId)) $('#drill-word').value = selectedId;
-  $('#drill-word').disabled = words.length === 0;
-  $('#drill-form button[type="submit"]').disabled = words.length === 0;
-  $('#drill-match-count').textContent = words.length ? `${words.length} ${query ? 'matching ' : ''}word${words.length === 1 ? '' : 's'}` : 'No matches. Try a different spelling or clear the search.';
+  drillMatches = state.words.filter(w => w.word.includes(query)).sort((a,b) => Number(b.word.startsWith(query)) - Number(a.word.startsWith(query)) || a.word.localeCompare(b.word));
+  drillHighlight = Math.max(0, drillMatches.findIndex(w => w.word === query));
+  $('#drill-word').value = drillMatches.find(w => w.word === query)?.id || '';
+  showDrillOptions(true);
+  renderDrillOptions();
+}
+function renderDrillOptions() {
+  const input = $('#drill-search'), word = drillMatches[drillHighlight];
+  $('#drill-options').innerHTML = drillMatches.length ? drillMatches.map((w,i) => `<div id="drill-option-${w.id}" role="option" aria-selected="${i === drillHighlight}" data-drill-option="${i}" class="word-option ${i === drillHighlight ? 'active' : ''}">${escapeHtml(w.word)}${w.tag ? `<small>${escapeHtml(w.tag)}</small>` : ''}</div>`).join('') : '<div class="no-word-options">No matching words</div>';
+  if (word && !$('#drill-options').hidden) input.setAttribute('aria-activedescendant', `drill-option-${word.id}`);
+  else input.removeAttribute('aria-activedescendant');
+  const typed = input.value;
+  const completion = word && typed && word.word.startsWith(typed.toLowerCase()) && input.selectionStart === typed.length && input.selectionEnd === typed.length ? word.word.slice(typed.length) : '';
+  $('#drill-completion').innerHTML = completion ? `<span class="completion-prefix">${escapeHtml(typed)}</span><span>${escapeHtml(completion)}</span>` : '';
+  $('#drill-form button[type="submit"]').disabled = !$('#drill-word').value;
+  $('#drill-match-count').textContent = drillMatches.length ? `${drillMatches.length} matching word${drillMatches.length === 1 ? '' : 's'}${completion ? ' · Tab to complete' : ''}` : 'No matches. Try a different spelling.';
+  if (word) $(`#drill-option-${word.id}`).scrollIntoView({block:'nearest'});
+}
+function acceptDrillWord() {
+  const word = drillMatches[drillHighlight];
+  if (!word) return;
+  $('#drill-search').value = word.word;
+  $('#drill-word').value = word.id;
+  $('#drill-search').setSelectionRange(word.word.length,word.word.length);
+  $('#drill-completion').textContent = '';
+  $('#drill-form button[type="submit"]').disabled = false;
+  $('#drill-match-count').textContent = `${word.word} selected`;
+  showDrillOptions(false);
 }
 function startReview(ids) {
+  if (!state.settings.review_enabled) return;
   let words = ids ? state.words.filter(w => ids.includes(w.id)) : dueWords().slice(0,10);
   if (!words.length) {
     if (!state.words.length) {openWord();toast('Add some words, or try the starter collection.');}
@@ -251,7 +299,7 @@ function startReview(ids) {
 function startDrill(event) {
   event.preventDefault();
   const word = state.words.find(w => w.id === Number($('#drill-word').value));
-  if (!word) return;
+  if (!word || !state.settings.drill_enabled) return;
   $('#drill-dialog').close();
   practice = {mode:'drill',queue:[word],index:0,attempts:0,correct:0,hinted:false,feedback:false,correction:false,started:Date.now(),repetitions:0,target:Number($('#drill-target').value),show:$('#drill-show').checked};
   openPractice();
@@ -301,7 +349,7 @@ function letterDiff(expected, answer) {
 }
 async function answerSubmit(event) {
   event.preventDefault();
-  if (!practice) return;
+  if (!practice || answerBusy || $('#practice-active').hidden) return;
   if (practice.feedback) {
     if (practice.mode === 'drill') {renderPractice();return;}
     if (practice.lastCorrect) {practice.index++;practice.correction = false;if (practice.index >= practice.queue.length) finishPractice();else renderPractice();}
@@ -310,10 +358,13 @@ async function answerSubmit(event) {
   }
   const answer = $('#answer').value;
   if (!answer.trim()) {$('#answer').focus();return;}
+  answerBusy = true;
+  const session = practice;
   await guarded(async () => {
     const word = currentWord();
     const mode = practice.mode === 'drill' ? 'drill' : practice.correction ? 'correction' : 'review';
     const result = await api(`/words/${word.id}/attempts`,'POST',{answer,mode,hinted:practice.hinted || practice.correction,elapsed_ms:Math.min(86400000,Date.now()-practice.wordStarted)});
+    if (practice !== session || !$('#practice-dialog').open || $('#practice-active').hidden) return;
     practice.lastCorrect = result.correct; practice.feedback = true;
     if (mode !== 'correction') {practice.attempts++;if (result.correct) practice.correct++;}
     $('#answer').disabled = true;
@@ -321,8 +372,13 @@ async function answerSubmit(event) {
     $('#answer-submit').innerHTML = (practice.mode === 'drill' ? 'Type it again' : result.correct ? practice.index + 1 >= practice.queue.length ? 'See my session' : 'Next word' : 'Practise the correction') + icon('arrow');
     if (practice.mode === 'drill' && practice.target && practice.correct >= practice.target) {finishPractice();}
     else if (practice.mode === 'drill' && result.correct) {drillTimer = setTimeout(() => {if (practice && practice.mode === 'drill' && practice.feedback && $('#practice-dialog').open && !$('#practice-active').hidden) renderPractice();},650);}
-    else $('#answer-submit').focus();
   },$('#answer-submit'));
+  answerBusy = false;
+  if (practice === session && $('#practice-dialog').open) {
+    if (!$('#practice-summary').hidden) $('#practice-summary button').focus();
+    else if (practice.feedback) $('#answer-submit').focus();
+    else $('#answer').focus();
+  }
 }
 function finishPractice() {
   clearTimeout(drillTimer);
@@ -397,7 +453,35 @@ $('#select-all').addEventListener('change',event => {visibleWords().forEach(w =>
 $('#word-search').addEventListener('input',renderLibrary);
 $('#word-form').addEventListener('submit',saveWord);
 $('#drill-form').addEventListener('submit',startDrill);
-$('#drill-search').addEventListener('input',() => filterDrillWords());
+$('#drill-search').addEventListener('input',filterDrillWords);
+$('#drill-search').addEventListener('focus',filterDrillWords);
+$('#drill-search').addEventListener('click',renderDrillOptions);
+$('#drill-search').addEventListener('keydown',event => {
+  if (event.isComposing) return;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    if ($('#drill-options').hidden) filterDrillWords();
+    else {drillHighlight = (drillHighlight + (event.key === 'ArrowDown' ? 1 : -1) + drillMatches.length) % (drillMatches.length || 1);renderDrillOptions();}
+  } else if (event.key === 'Tab' && !event.shiftKey && $('#drill-completion').textContent) {
+    event.preventDefault();acceptDrillWord();
+  } else if (event.key === 'Enter' && !$('#drill-options').hidden) {
+    event.preventDefault();acceptDrillWord();
+  } else if (event.key === 'Escape' && !$('#drill-options').hidden) {
+    event.preventDefault();event.stopPropagation();showDrillOptions(false);$('#drill-completion').textContent = '';
+  }
+});
+$('#drill-options').addEventListener('mousedown',event => {
+  const option = event.target.closest('[data-drill-option]');
+  if (option) {event.preventDefault();drillHighlight = Number(option.dataset.drillOption);acceptDrillWord();}
+});
+$('#drill-toggle').addEventListener('click',() => {const open = $('#drill-options').hidden;$('#drill-search').focus();if (open) filterDrillWords();else showDrillOptions(false);});
+$('#drill-search').addEventListener('blur',() => {showDrillOptions(false);$('#drill-completion').textContent = '';});
+$('#practice-dialog').addEventListener('keydown',event => {
+  if (event.key !== 'Enter' || event.isComposing || $('#practice-active').hidden) return;
+  if (event.repeat) {event.preventDefault();return;}
+  if (answerBusy) {event.preventDefault();return;}
+  if (practice?.feedback) {event.preventDefault();answerSubmit(event);}
+});
 $('#answer-form').addEventListener('submit',answerSubmit);
 $('#dictionary-sense').addEventListener('change',applyDictionarySense);
 $('#dictionary-example').addEventListener('change',() => {$('#word-form').elements.sentence.value = $('#dictionary-example').value;});
@@ -413,5 +497,5 @@ $('#date-label').textContent = new Date().toLocaleDateString(undefined,{weekday:
 guarded(async () => {await refresh();navigate(location.hash.slice(1) || 'today');});
 setInterval(async () => {
   if (!state || document.hidden) return;
-  try {const job = await api('/enrichment');if (job.busy !== state.enrichment.busy || job.done !== state.enrichment.done || job.pending !== state.enrichment.pending) {await refresh();}else {state.enrichment = job;renderQueue();renderKeys();}}catch { /* Keep the notebook usable during a temporary disconnect. */ }
+  try {const job = await api('/enrichment');if (job.busy !== state.enrichment.busy || job.done !== state.enrichment.done || job.pending !== state.enrichment.pending || job.message !== state.enrichment.message || job.status !== state.enrichment.status || job.id !== state.enrichment.id) {await refresh();}else {state.enrichment = job;renderQueue();renderKeys();}}catch { /* Keep the notebook usable during a temporary disconnect. */ }
 },4000);

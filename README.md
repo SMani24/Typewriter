@@ -45,8 +45,10 @@ Remove `~/.local/share/applications/typewriter.desktop` to remove the menu entry
 - Add individual words with manual clues, or paste a list of words.
 - Look up meanings, exact-word examples, and UK/US audio in Cambridge Dictionary.
 - Ask Gemini to fill missing meanings, sentences, and spelling tips in batches.
-- Search your word list, then drill a word for 10, 20, or 50 correct repetitions, or practise without a target.
-- Review due words, or select a set for extra practice.
+- Find a drill word in an editable dropdown; matches narrow as you type, with Tab completion.
+- Drill for 10, 20, or 50 correct repetitions, or practise without a target.
+- Review due words, or select a set for extra practice. Enter checks an answer and advances through feedback.
+- Choose active reviews and drills in Settings → Practice modes.
 - See recall accuracy, practice activity, and recurring misspellings.
 - Export and import words and history from Settings. Repeated imports don't duplicate attempts.
 
@@ -66,7 +68,13 @@ The default model is `gemini-flash-latest`; you can select a specific Flash vers
 
 Results are saved locally. Existing text is preserved, and unsuitable sentences are
 rejected. Sources are shown in the word editor; suggestions remain editable.
-Failed jobs keep your words in the queue and require a manual retry.
+Failures and partial results remain visible after refreshing or restarting. Failed words
+stay queued for a manual retry. Temporary server errors receive up to two retries,
+with backoff and the same request budgets; retries also count as requests.
+A generation request waits up to two minutes for a response, allowing slower thinking
+models to finish; the batch status stays visible while it runs.
+Settings → Application log shows recent results, HTTP statuses, and connection errors.
+Download the log when troubleshooting; raw responses and credentials are never logged.
 
 Keys rotate between requests and when a provider limit or rejected key is encountered.
 Usage and cooldowns survive restarts. Daily counters reset at midnight Pacific time.
@@ -87,7 +95,8 @@ Use **Save & test connection** to check the route; this checks connectivity, not
 
 ## Local data
 
-Your notebook, settings, request counters, and cached audio are in **`data/`**.
+Your notebook, settings, request counters, preparation results, the latest 500 log events,
+and cached audio are in **`data/`**. Logs live in SQLite alongside the notebook.
 API keys, proxy credentials, backups, and personal data are excluded from Git.
 Backups contain words and attempts, but no keys or connection settings.
 The server binds to localhost and uses same-origin request checks. This is a personal
