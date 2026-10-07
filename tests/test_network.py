@@ -82,3 +82,30 @@ class NetworkTests(unittest.TestCase):
         self.store.add_words([{"word": "necessary"}])
         self.enrichment.auto_schedule()
         self.assertIsNone(self.enrichment.timer)
+
+    def test_selected_batch_leaves_other_words_queued(self):
+        ids = self.store.add_words([{"word": "necessary"}, {"word": "different"}])["added"]
+        self.enrichment.generate = Mock(return_value={"necessary": {"definition": "Needed", "sentence": "This is necessary.", "tip": "One c, two s."}})
+        self.enrichment.run([ids[0]])
+        self.assertEqual(self.store.word(ids[0])["status"], "ready")
+        self.assertEqual(self.store.word(ids[1])["status"], "pending")
+        self.assertEqual(len(self.enrichment.generate.call_args.args[0]), 1)
+
+    def test_day_reset_restores_budget(self):
+        self.store.save_settings({"daily_budget": 1})
+        pool = self.enrichment.pool
+        pool.reserve(set())
+        pool.reserve(set())
+        with self.assertRaises(ValueError):
+            pool.reserve(set())
+        with patch('typewriter.enrichment.quota_day', return_value='2099-01-02'):
+            self.assertTrue(pool.reserve(set())[0])
+
+    def test_all_limited_keys_stop_without_looping(self):
+        word_id = self.store.add_words([{"word": "necessary"}])["added"][0]
+        response = Mock(status_code=429, text='RequestsPerDay exceeded')
+        with patch.object(self.network, 'request', return_value=response) as request:
+            self.enrichment.run([word_id])
+        self.assertEqual(request.call_count, 2)
+        self.assertFalse(self.enrichment.snapshot()["busy"])
+        self.assertIn("cooling down", self.enrichment.snapshot()["error"])

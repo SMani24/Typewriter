@@ -112,7 +112,7 @@ class Enrichment:
         self.pool = KeyPool(store, keys_path)
         self.lock = threading.Lock()
         self.timer = None
-        self.state = {"busy": False, "message": "Ready when you are.", "done": 0, "total": 0}
+        self.state = {"busy": False, "message": "Ready when you are.", "done": 0, "total": 0, "error": ""}
 
     def pending(self, include_errors=True):
         return [w for w in self.store.list_words() if w["status"] != "ready" and (include_errors or not w["enrichment_error"])]
@@ -153,7 +153,7 @@ class Enrichment:
         with self.lock:
             if self.state["busy"]:
                 return {"started": False, "message": "A batch is already running. Your words remain queued."}
-            self.state = {"busy": True, "message": "Preparing your words…", "done": 0, "total": len(words)}
+            self.state = {"busy": True, "message": "Preparing your words…", "done": 0, "total": len(words), "error": ""}
         thread = threading.Thread(target=self.run, args=([w["id"] for w in words],), daemon=True)
         thread.start()
         return {"started": True, "message": f"Preparing {len(words)} words in the background."}
@@ -182,12 +182,14 @@ class Enrichment:
             message = str(error)
             with self.lock:
                 self.state["message"] = message
+                self.state["error"] = message
             with self.store.db() as db:
                 db.executemany("UPDATE words SET enrichment_error=? WHERE id=? AND status!='ready'", [(message, i) for i in ids])
         except Exception:
             failed = True
             with self.lock:
                 self.state["message"] = "The batch could not be completed. Your words are saved. Try again or add the material manually."
+                self.state["error"] = self.state["message"]
         finally:
             with self.lock:
                 self.state["busy"] = False

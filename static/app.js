@@ -26,7 +26,7 @@ const paths = {
 };
 const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.book}</svg>`;
 function hydrateIcons(root = document) { $$('[data-icon]', root).forEach(el => el.innerHTML = icon(el.dataset.icon)); }
-let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer;
+let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer, drillTimer;
 const token = $('meta[name="typewriter-token"]').content;
 
 async function api(path, method = 'GET', data) {
@@ -106,8 +106,8 @@ function renderLibrary() {
 function renderQueue() {
   const job = state.enrichment;
   $('#queue-banner').classList.toggle('busy', job.busy);
-  $('#queue-banner').innerHTML = `${icon('spark')}<div><span>${job.busy ? escapeHtml(job.message) : job.pending ? `${job.pending} word${job.pending === 1 ? '' : 's'} waiting to be prepared` : 'Your words are ready when you are.'}</span><p>${job.busy ? 'You can keep practising while this runs.' : job.pending ? `Automatic preparation waits for ${state.settings.batch_size} words. Select a set or prepare the queue now.` : 'Meanings, sentences, and tips can always be edited.'}</p></div>${job.pending ? `<button class="text-button" data-action="prepare-all" ${job.busy ? 'disabled' : ''}>Prepare now${icon('arrow')}</button>` : ''}`;
-  $('#settings-pending').textContent = job.busy ? job.message : `${job.pending} words queued`;
+  $('#queue-banner').innerHTML = `${icon('spark')}<div><span>${job.busy ? escapeHtml(job.message) : job.pending ? `${job.pending} word${job.pending === 1 ? '' : 's'} waiting to be prepared` : 'Your words are ready when you are.'}</span><p>${job.error ? escapeHtml(job.error) : job.busy ? 'You can keep practising while this runs.' : job.pending ? `Automatic preparation waits for ${state.settings.batch_size} words. Select a set or prepare the queue now.` : 'Meanings, sentences, and tips can always be edited.'}</p></div>${job.pending ? `<button class="text-button" data-action="prepare-all" ${job.busy ? 'disabled' : ''}>Prepare now${icon('arrow')}</button>` : ''}`;
+  $('#settings-pending').textContent = job.error || (job.busy ? job.message : `${job.pending} words queued`);
 }
 function renderProgress() {
   const p = state.progress;
@@ -115,7 +115,7 @@ function renderProgress() {
   const days = Array.from({length:7},(_,i) => {const d = new Date(); d.setUTCDate(d.getUTCDate() - (6-i)); return d.toISOString().slice(0,10);});
   const maximum = Math.max(5,...p.history.map(d => d.total));
   $('#activity-chart').innerHTML = days.map(day => {const data = p.history.find(h => h.day === day) || {total:0,correct:0};return `<div class="chart-day"><span class="chart-value">${data.total || '·'}</span><div class="bar-track"><div class="bar-total" data-height="${Math.max(3,128 * data.total / maximum)}"><div class="bar-correct" data-height="${data.total ? 100 * data.correct / data.total : 0}" data-percent="true"></div></div></div><span>${new Date(day + 'T12:00:00Z').toLocaleDateString(undefined,{weekday:'short',timeZone:'UTC'})}</span></div>`;}).join('');
-  $$('[data-height]','#activity-chart' instanceof Element ? '#activity-chart' : $('#activity-chart')).forEach(el => el.style.height = el.dataset.height + (el.dataset.percent ? '%' : 'px'));
+  $$('[data-height]', $('#activity-chart')).forEach(el => el.style.height = el.dataset.height + (el.dataset.percent ? '%' : 'px'));
   $('#mistake-list').innerHTML = p.mistakes.length ? p.mistakes.map(m => `<div class="mistake"><div><strong>${escapeHtml(m.word)}</strong><small>You typed “${escapeHtml(m.answer)}”</small></div><span class="mistake-count">${m.count} time${m.count === 1 ? '' : 's'}</span></div>`).join('') : empty('A fresh page.', 'Your recurring misspellings will appear here after you practise.');
 }
 function fillSettings() {
@@ -155,7 +155,8 @@ function openWord(id = null) {
   $('#word-save-note').innerHTML = id ? `<button type="button" class="text-button" data-action="delete-word">${icon('trash')}Remove word</button>` : 'Saved locally. Prepared at your pace.';
   const form = $('#word-form');
   form.elements.word.readOnly = id !== null;
-  if (id) {const word = state.words.find(w => w.id === id);['word','definition','sentence','tip','tag'].forEach(k => form.elements[k].value = word[k]);}
+  if (id) {const word = state.words.find(w => w.id === id);['word','definition','sentence','tip','tag'].forEach(k => form.elements[k].value = word[k]);$('#word-provenance').textContent = ['definition','sentence','tip'].filter(k => word[k]).map(k => ({definition:'Meaning',sentence:'Sentence',tip:'Tip'})[k] + ': ' + (word.sources[k] || 'manual')).join(' · ');}
+  else $('#word-provenance').textContent = 'Automatic suggestions are labelled with their source. You can edit every field.';
   $('#word-dialog').showModal();
   setTimeout(() => form.elements.word.focus(),30);
 }
@@ -252,6 +253,7 @@ function openPractice() {
 function currentWord() {return practice.queue[practice.mode === 'drill' ? 0 : practice.index];}
 function concealed(word, text) {return String(text || '').replace(new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'),'________');}
 function renderPractice() {
+  clearTimeout(drillTimer);
   const word = currentWord(), drill = practice.mode === 'drill';
   practice.feedback = false; practice.hinted = false; practice.wordStarted = Date.now();
   $('#practice-mode').textContent = drill ? 'WORD DRILL · FIND YOUR RHYTHM' : 'DAILY REVIEW · ONE WORD AT A TIME';
@@ -306,11 +308,12 @@ async function answerSubmit(event) {
     $('#practice-feedback').innerHTML = result.correct ? `<div class="feedback-heading">${practice.hinted ? 'That’s right. Try recalling it unaided next time.' : practice.correction ? 'Nicely corrected. Keep that spelling in mind.' : 'That’s right. A little more familiar.'}</div>${result.tip ? `<span class="muted">${escapeHtml(result.tip)}</span>` : ''}` : `<div class="feedback-heading incorrect">Take another look. You’re learning the tricky part.</div>${letterDiff(result.expected,result.answer)}<span class="muted">${escapeHtml(result.tip || 'Notice the highlighted letters, then try again.')}</span>`;
     $('#answer-submit').innerHTML = (practice.mode === 'drill' ? 'Type it again' : result.correct ? practice.index + 1 >= practice.queue.length ? 'See my session' : 'Next word' : 'Practise the correction') + icon('arrow');
     if (practice.mode === 'drill' && practice.target && practice.correct >= practice.target) {finishPractice();}
-    else if (practice.mode === 'drill' && result.correct) {setTimeout(() => {if (practice && practice.mode === 'drill' && practice.feedback && $('#practice-dialog').open && !$('#practice-active').hidden) renderPractice();},650);}
+    else if (practice.mode === 'drill' && result.correct) {drillTimer = setTimeout(() => {if (practice && practice.mode === 'drill' && practice.feedback && $('#practice-dialog').open && !$('#practice-active').hidden) renderPractice();},650);}
     else $('#answer-submit').focus();
   },$('#answer-submit'));
 }
 function finishPractice() {
+  clearTimeout(drillTimer);
   if (!practice) return;
   const p = practice, minutes = Math.max(1,Math.round((Date.now()-p.started)/60000));
   $('#practice-active').hidden = true; $('#practice-summary').hidden = false;
@@ -346,7 +349,7 @@ const actions = {
   hint:() => {if (!practice) return;practice.hinted = true;$('#practice-word').textContent = currentWord().word;$('#hint-button').hidden = true;$('#practice-label').textContent = 'LOOK, REMEMBER, THEN TYPE';$('#answer').focus();},
   listen,
   'finish-practice':() => {if ($('#practice-summary').hidden) finishPractice();else actions['close-practice']();},
-  'close-practice':() => {$('#practice-dialog').close();practice = null;},
+  'close-practice':() => {clearTimeout(drillTimer);$('#practice-dialog').close();practice = null;},
 };
 document.addEventListener('click',event => {
   const page = event.target.closest('[data-page]');if (page) {navigate(page.dataset.page);return;}

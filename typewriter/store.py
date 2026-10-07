@@ -10,7 +10,7 @@ from pathlib import Path
 DEFAULTS = {
     "proxy_enabled": False, "proxy_type": "socks5h", "proxy_host": "127.0.0.1",
     "proxy_port": 10808, "proxy_username": "", "proxy_password": "",
-    "model": "gemini-3.6-flash", "auto_ai": True, "batch_size": 5,
+    "model": "gemini-flash-latest", "auto_ai": True, "batch_size": 5,
     "daily_budget": 20, "requests_per_minute": 4,
 }
 
@@ -108,7 +108,7 @@ class Store:
         if not isinstance(values["proxy_host"], str) or not re.fullmatch(r"[a-zA-Z0-9.:-]{1,253}", values["proxy_host"]):
             raise ValueError("Enter a proxy hostname or IP address, without a URL prefix.")
         if not isinstance(values["model"], str) or not re.fullmatch(r"gemini-[a-zA-Z0-9.\-]{1,80}", values["model"]):
-            raise ValueError("Enter a Gemini model name, such as gemini-3.6-flash.")
+            raise ValueError("Enter a Gemini model name, such as gemini-flash-latest.")
         for key in ["proxy_username", "proxy_password"]:
             if not isinstance(values[key], str) or len(values[key]) > 200:
                 raise ValueError("Proxy credentials must be shorter than 200 characters.")
@@ -177,8 +177,8 @@ class Store:
         item = self.validate_word({**original, **{k: v for k, v in data.items() if k in ["definition", "sentence", "tip", "tag"]}})
         sources = original["sources"]
         for field in ["definition", "sentence", "tip"]:
-            if field in data:
-                sources[field] = data.get("source", "manual") if data.get("source") == "Cambridge" else "manual"
+            if field in data and (item[field] != original[field] or data.get("source") == "Cambridge" and field in ["definition", "sentence"]):
+                sources[field] = "Cambridge" if data.get("source") == "Cambridge" and field in ["definition", "sentence"] else "manual"
         audio = data.get("audio_url", original["audio_url"]) if data.get("source") == "Cambridge" else original["audio_url"]
         if audio and not re.fullmatch(r"https://dictionary\.cambridge\.org/[^\s]+", audio):
             raise ValueError("Unsupported pronunciation URL.")

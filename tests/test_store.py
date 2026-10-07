@@ -55,3 +55,10 @@ class StoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.add_words([{"word": "different"}, {"word": "<script>"}])
         self.assertEqual(len(self.store.list_words()), 1)
+
+    def test_source_labels_survive_unchanged_edits(self):
+        self.store.enrich_word(self.id, {"definition": "Needed", "sentence": "This is necessary.", "tip": "One c, two s."}, "Gemini")
+        self.store.edit_word(self.id, {"definition": "Needed", "sentence": "This is necessary.", "tip": "My own spelling tip"})
+        sources = self.store.word(self.id)["sources"]
+        self.assertEqual(sources["definition"], "Gemini")
+        self.assertEqual(sources["tip"], "manual")
