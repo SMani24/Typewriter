@@ -72,12 +72,24 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.locator('#answer').fill('neccessary');
     await page.locator('#answer').press('Enter');
     await page.waitForSelector('.letter-diff');
+    assert.equal(await page.locator('#answer').getAttribute('aria-invalid'),'true');
+    if(process.env.TYPEWRITER_SCREENSHOTS) await page.screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'spelling-feedback-incorrect.png'),animations:'disabled'});
     await page.keyboard.press('Enter');
     assert(await page.locator('#pronunciation').evaluate(audio=>audio.paused && !audio.hasAttribute('src')));
     assert.equal(await page.locator('#practice-word').innerText(),'necessary');
+    assert.equal(await page.locator('#answer').getAttribute('aria-invalid'),null);
     await page.locator('#answer').fill('necessary');
     await page.locator('#answer').press('Enter');
     await page.waitForFunction(()=>document.querySelector('#answer-submit').textContent.includes('Next word'));
+    assert((await page.locator('#practice-feedback').innerText()).includes('Spelling corrected!'));
+    if(process.env.TYPEWRITER_SCREENSHOTS) {
+      await page.screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'spelling-feedback-correct.png'),animations:'disabled'});
+      await page.setViewportSize({width:390,height:844});
+      await page.locator('#answer-submit').scrollIntoViewIfNeeded();
+      await page.screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'spelling-feedback-mobile.png'),animations:'disabled'});
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+      await page.setViewportSize({width:1360,height:1050});
+    }
     await page.keyboard.press('Enter');
     await page.getByRole('button',{name:'End session',exact:true}).click();
     await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
@@ -114,7 +126,15 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
       await page.waitForFunction(()=>!document.querySelector('#answer').disabled);
       await page.locator('#answer').fill('necessary');
       await page.locator('#answer').press('Enter');
-      if(n<9) {await page.waitForFunction(()=>document.querySelector('#answer-submit').textContent.includes('Type it again'));await page.keyboard.press('Enter');}
+      if(n<9) {
+        await page.waitForFunction(()=>document.querySelector('#answer-submit').textContent.includes('Type it again'));
+        if(n===0) {
+          await page.waitForTimeout(1000);
+          assert(await page.locator('#answer').isDisabled());
+          assert((await page.locator('#practice-feedback').innerText()).includes('Correct spelling!'));
+        }
+        await page.keyboard.press('Enter');
+      }
     }
     await page.waitForSelector('#practice-summary:not([hidden])');
     await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();

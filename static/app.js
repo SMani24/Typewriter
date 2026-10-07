@@ -26,7 +26,7 @@ const paths = {
 };
 const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.book}</svg>`;
 function hydrateIcons(root = document) { $$('[data-icon]', root).forEach(el => el.innerHTML = icon(el.dataset.icon)); }
-let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer, drillTimer, audioSequence = 0, answerBusy = false, drillMatches = [], drillHighlight = 0, preparedPreviewText = null;
+let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer, audioSequence = 0, answerBusy = false, drillMatches = [], drillHighlight = 0, preparedPreviewText = null;
 let pendingFailure = null;
 const preparationPending = word => word.status !== 'ready' || !!word.meaning_flagged;
 const token = $('meta[name="typewriter-token"]').content;
@@ -359,7 +359,6 @@ function makeMeaningChoices(word) {
   return shuffle([word,...shuffle(others).slice(0,3)]);
 }
 function renderPractice() {
-  clearTimeout(drillTimer);
   stopPronunciation();
   const word = currentWord(), drill = practice.mode === 'drill', meaning = !drill && word.exercise === 'meaning', audioOnly = !drill && word.exercise === 'audio' && !practice.correction;
   practice.feedback = false; practice.hinted = false; practice.audioBlocked = false; practice.choice = null; practice.wordStarted = Date.now();
@@ -379,6 +378,9 @@ function renderPractice() {
   $('#skip-audio').hidden = !audioOnly;
   $('#playback-status').textContent = '';
   $('#practice-feedback').innerHTML = '';
+  delete $('#answer-form').dataset.result;
+  $('#answer-form').setAttribute('aria-busy','false');
+  $('#answer').removeAttribute('aria-invalid');
   $('#answer').value = '';$('#answer').disabled = false;$('#answer').hidden = meaning;
   $('#meaning-options').hidden = !meaning;
   if (meaning) {
@@ -411,6 +413,10 @@ function letterDiff(expected, answer) {
   }
   return '<div class="letter-diff" aria-label="Correct spelling with changes highlighted">'+parts.reverse().join('')+'</div>';
 }
+function practiceFeedback(outcome, heading, detail = '') {
+  $('#answer-form').dataset.result = outcome;
+  $('#practice-feedback').innerHTML = `<div class="feedback-card"><span class="feedback-mark" aria-hidden="true">${icon(outcome === 'correct' ? 'check' : outcome === 'checking' ? 'keyboard' : 'edit')}</span><div class="feedback-content"><div class="feedback-heading">${escapeHtml(heading)}</div>${detail}</div></div>`;
+}
 async function answerSubmit(event) {
   event.preventDefault();
   if (!practice || answerBusy || $('#practice-active').hidden) return;
@@ -426,22 +432,43 @@ async function answerSubmit(event) {
   if (!answer.trim()) {$('#answer').focus();return;}
   answerBusy = true;
   const session = practice;
+  $('#answer-form').setAttribute('aria-busy','true');
+  $('#answer').disabled = true;$$('.meaning-choice').forEach(b => b.disabled = true);
+  $('#answer-submit').textContent = 'Checking…';
+  practiceFeedback('checking','Checking your answer…');
   await guarded(async () => {
     const word = currentWord();
     const mode = practice.mode === 'drill' ? 'drill' : practice.correction ? 'correction' : meaning ? 'meaning' : 'review';
-    const result = await api(`/words/${word.id}/attempts`,'POST',{answer,mode,...(meaning ? {version:word.version} : {}),hinted:practice.hinted || practice.correction,elapsed_ms:Math.min(86400000,Date.now()-practice.wordStarted)});
+    let result;
+    try {
+      result = await api(`/words/${word.id}/attempts`,'POST',{answer,mode,...(meaning ? {version:word.version} : {}),hinted:practice.hinted || practice.correction,elapsed_ms:Math.min(86400000,Date.now()-practice.wordStarted)});
+    } catch (error) {
+      if (practice === session && $('#practice-dialog').open && !$('#practice-active').hidden) practiceFeedback('error','Couldn’t check this answer',`<p>${escapeHtml(error.message || 'Please try again.')}</p>`);
+      throw error;
+    }
     if (practice !== session || !$('#practice-dialog').open || $('#practice-active').hidden) return;
     practice.lastCorrect = result.correct; practice.feedback = true;
     if (mode !== 'correction') {practice.attempts++;if (result.correct) practice.correct++;}
     $('#answer').disabled = true;
     $$('.meaning-choice').forEach(b => b.disabled = true);
-    $('#practice-feedback').innerHTML = meaning ? `<div class="feedback-heading ${result.correct ? '' : 'incorrect'}">${result.correct ? 'That’s the meaning.' : 'Keep this meaning in mind.'}</div><span>${escapeHtml(result.expected)}</span>` : result.correct ? `<div class="feedback-heading">${practice.hinted ? 'That’s right. Try recalling it unaided next time.' : practice.correction ? 'Nicely corrected. Keep that spelling in mind.' : 'That’s right. A little more familiar.'}</div>${result.tip ? `<span class="muted">${escapeHtml(result.tip)}</span>` : ''}` : `<div class="feedback-heading incorrect">Take another look. You’re learning the tricky part.</div>${letterDiff(result.expected,result.answer)}<span class="muted">${escapeHtml(result.tip || 'Notice the highlighted letters, then try again.')}</span>`;
-    $('#answer-submit').innerHTML = (practice.mode === 'drill' ? 'Type it again' : result.correct ? practice.index + 1 >= practice.queue.length ? 'See my session' : 'Next word' : meaning ? (practice.index + 1 >= practice.queue.length ? 'See my session' : 'Next word') : 'Practise the correction') + icon('arrow');
+    const heading = meaning ? (result.correct ? 'That’s the meaning.' : 'Not quite — here’s the meaning.') : result.correct ? (practice.correction ? 'Spelling corrected!' : 'Correct spelling!') : 'Let’s correct the spelling.';
+    const detail = meaning ? `<p>${result.correct ? '' : 'Keep this meaning in mind. '}${escapeHtml(result.expected)}</p>` : result.correct ? `<p>${practice.hinted ? 'Try recalling it unaided next time.' : 'That’s right. A little more familiar.'}</p>${result.tip ? `<p class="feedback-tip">${escapeHtml(result.tip)}</p>` : ''}` : `${letterDiff(result.expected,result.answer)}<p>${escapeHtml(result.tip || 'Notice the highlighted letters, then try again.')}</p>`;
+    practiceFeedback(result.correct ? 'correct' : 'incorrect',heading,detail);
+    $('#answer').setAttribute('aria-invalid',String(!result.correct && !meaning));
+    if (meaning) $$('.meaning-choice').forEach((button,i) => {
+      button.classList.toggle('choice-correct',String(practice.choices[i].id) === String(word.id));
+      button.classList.toggle('choice-incorrect',String(practice.choices[i].id) === String(practice.choice) && !result.correct);
+    });
+    $('#answer-submit').innerHTML = (practice.mode === 'drill' ? 'Type it again' : result.correct ? practice.index + 1 >= practice.queue.length ? 'See my session' : 'Next word' : meaning ? (practice.index + 1 >= practice.queue.length ? 'See my session' : 'Next word') : 'Practise the correction') + '<span class="enter-key" aria-hidden="true">Enter ↵</span>';
     if (practice.mode === 'drill' && practice.target && practice.correct >= practice.target) {finishPractice();}
-    else if (practice.mode === 'drill' && result.correct) {drillTimer = setTimeout(() => {if (practice && practice.mode === 'drill' && practice.feedback && $('#practice-dialog').open && !$('#practice-active').hidden) renderPractice();},650);}
   },$('#answer-submit'));
   answerBusy = false;
   if (practice === session && $('#practice-dialog').open) {
+    $('#answer-form').setAttribute('aria-busy','false');
+    if (!practice.feedback && !$('#practice-active').hidden) {
+      $('#answer').disabled = false;$$('.meaning-choice').forEach(b => b.disabled = false);
+      $('#answer-submit').innerHTML = (meaning ? 'Check meaning' : 'Check spelling') + icon('arrow');
+    }
     if (!$('#practice-summary').hidden) $('#practice-summary button').focus();
     else if (practice.feedback) $('#answer-submit').focus();
     else if (meaning) $('#answer-submit').focus();
@@ -449,7 +476,6 @@ async function answerSubmit(event) {
   }
 }
 function finishPractice() {
-  clearTimeout(drillTimer);
   stopPronunciation();
   if (!practice) return;
   const p = practice, minutes = Math.max(1,Math.round((Date.now()-p.started)/60000));
@@ -552,6 +578,7 @@ async function flagPracticeAudio() {
   if (practice.mode === 'review' && word.exercise === 'audio') {
     practice.audioBlocked = true;practice.feedback = true;practice.lastCorrect = true;
     $('#answer').disabled = true;$('#answer-submit').textContent = 'Skip this word';$('#answer-submit').focus();
+    practiceFeedback('skipped','Recording flagged', '<p>Press Enter to skip this recording.</p>');
   }
   await refresh();toast('Recording excluded. Upload a replacement in the word editor.');
 }
@@ -582,7 +609,8 @@ async function flagMeaning(id, flagged) {
         stopPronunciation();practice.feedback = true;practice.lastCorrect = true;
         $('#answer').disabled = true;$$('.meaning-choice').forEach(b=>b.disabled=true);
         $('#practice-clue').textContent = 'Marked for correction.';$('#meaning-options').hidden = true;
-        $('#practice-feedback').textContent = 'Meaning flagged for correction. Skip this question and keep practising.';
+        $('#answer').removeAttribute('aria-invalid');
+        practiceFeedback('skipped','Meaning flagged for correction','<p>Skip this question and keep practising.</p>');
         $('#answer-submit').textContent = 'Continue · Enter';$('#answer-submit').focus();
       }
     }
@@ -681,7 +709,7 @@ const actions = {
   'remove-audio':removeUploadedAudio, 'flag-practice-audio':flagPracticeAudio,
   'skip-audio':skipAudio,
   'finish-practice':() => {if ($('#practice-summary').hidden) finishPractice();else actions['close-practice']();},
-  'close-practice':() => {clearTimeout(drillTimer);stopPronunciation();$('#practice-dialog').close();practice = null;},
+  'close-practice':() => {stopPronunciation();$('#practice-dialog').close();practice = null;},
 };
 document.addEventListener('click',event => {
   const choice = event.target.closest('[data-meaning-choice]');if (choice) {selectMeaning(Number(choice.dataset.meaningChoice));return;}

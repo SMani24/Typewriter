@@ -47,7 +47,7 @@ Remove `~/.local/share/applications/typewriter.desktop` to remove the menu entry
 - Ask Gemini to fill missing meanings, sentences, and spelling tips in batches.
 - Find a drill word in an editable dropdown; matches narrow as you type, with Tab completion.
 - Drill for 10, 20, or 50 correct repetitions, or practise without a target.
-- Review due words, or select a set for extra practice. Enter checks an answer and advances through feedback.
+- Review due words, or select a set for extra practice. Enter checks an answer; a result card stays visible until you press Enter again.
 - Choose sentence spelling, spelling from a meaning, audio-only spelling, and meaning quizzes in Settings.
 - Listening exercises play automatically; **Alt+P** plays or replays audio inside a session.
 - Flag incorrect pronunciation, preview recordings, or upload your own voice in the word editor.

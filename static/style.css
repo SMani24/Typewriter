@@ -17,3 +17,29 @@ dialog{border:1px solid #dce1d2;color:var(--ink);background:var(--white);border-
 .meaning-options{display:grid;gap:10px;margin:18px 0}.meaning-choice{display:flex;text-align:left;align-items:center;gap:14px;border:1px solid var(--line);background:var(--paper,#fcfdf8);color:var(--ink);border-radius:8px;padding:13px 16px;line-height:1.6}.meaning-choice>span{display:grid;place-items:center;flex-shrink:0;width:25px;height:25px;border-radius:5px;background:#e8eddf;font-size:12px}.meaning-choice.selected{border-color:#4c7250;background:#edf3e7}.word-audio-panel{border-top:1px solid var(--line);padding-top:18px;margin-top:22px}.word-audio-panel audio{width:100%;height:38px;margin:8px 0 15px}.word-audio-panel h3{font-family:var(--serif);font-size:23px;font-weight:400}.word-audio-panel .checkbox-label{margin:16px 0}.preparation-dialog{max-width:740px;width:calc(100% - 32px)}.preparation-dialog hr{border:0;border-top:1px solid var(--line);margin:25px 0}.prepared-entry{border-top:1px solid var(--line);padding:16px 0}.prepared-entry p{margin:6px 0;line-height:1.7}.preparation-preview{margin-top:20px;max-height:300px;overflow:auto}.preparation-actions{justify-content:flex-end;margin-bottom:16px}.practice-tools{flex-wrap:wrap}#playback-status{text-align:center;min-height:16px}.word-audio-panel .inline-actions{flex-wrap:wrap}#preparation-dialog .field-grid{margin-bottom:12px}
 
 .meaning-choice,.prepared-entry,.preparation-dialog p{overflow-wrap:anywhere}
+
+/* Make answer checking a visible step while keeping practice on the keyboard. */
+.practice-feedback{min-height:78px;padding:14px 0;font-size:13px;line-height:1.55}
+.feedback-card{display:flex;align-items:flex-start;gap:14px;padding:18px 20px;border:1px solid #b5cbb0;border-radius:10px;background:#eaf2e5;text-align:left;color:#25492e;animation:answer-result .18s ease-out}
+.feedback-mark{display:grid;place-items:center;width:38px;height:38px;flex-shrink:0;border-radius:50%;background:#d2e5c9;color:#315b38}
+.feedback-mark .icon{width:23px;height:23px;stroke-width:2.2}
+.feedback-content{min-width:0;flex:1;overflow-wrap:anywhere}
+.feedback-card .feedback-heading{font-family:var(--serif);font-size:24px;font-weight:400;line-height:1.2;color:inherit;margin:3px 0 7px}
+.feedback-content p+p{margin-top:6px}
+.feedback-tip{font-size:12px}
+.feedback-card .letter-diff{justify-content:flex-start;flex-wrap:wrap;font-size:27px;margin:10px 0}
+#answer-form[data-result="correct"] .answer-input{border-color:#60894f;box-shadow:inset 0 0 0 1px #60894f;background:#f2f8ed!important;color:#25492e}
+#answer-form[data-result="incorrect"] .answer-input{border-color:#b47b3f;box-shadow:inset 0 0 0 1px #b47b3f;background:#fff6e8!important;color:#694421}
+#answer-form[data-result="incorrect"] .feedback-card,#answer-form[data-result="error"] .feedback-card{border-color:#d8b887;background:#fbefd9;color:#754b20}
+#answer-form[data-result="incorrect"] .feedback-mark,#answer-form[data-result="error"] .feedback-mark{background:#eed7b2;color:#80501e}
+#answer-form[data-result="checking"] .feedback-card,#answer-form[data-result="skipped"] .feedback-card{border-color:#d4dacb;background:#eef0e7;color:#495a42}
+#answer-form[data-result="checking"] .feedback-mark,#answer-form[data-result="skipped"] .feedback-mark{background:#dde4d4;color:#495a42}
+#answer-form[data-result="checking"] .feedback-mark{animation:checking-answer 1s ease-in-out infinite}
+#answer-form .meaning-choice.choice-correct{border-color:#60894f;background:#eaf2e5;color:#25492e;box-shadow:inset 3px 0 #60894f;opacity:1}
+#answer-form .meaning-choice.choice-incorrect{border-color:#b47b3f;background:#fbefd9;color:#754b20;box-shadow:inset 3px 0 #b47b3f;opacity:1}
+#answer-submit{min-width:230px;justify-content:space-between}
+.enter-key{border:1px solid #ffffff50;border-radius:4px;padding:2px 6px;font-size:10px;letter-spacing:0;white-space:nowrap}
+@keyframes answer-result{from{opacity:.5;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+@keyframes checking-answer{50%{opacity:.45}}
+@media(max-width:560px){.feedback-card{padding:15px 13px;gap:11px}.feedback-card .feedback-heading{font-size:22px}.feedback-mark{width:32px;height:32px}.feedback-tip{font-size:11px}#answer-submit{width:100%;min-width:0}}
+@media(prefers-reduced-motion:reduce){.feedback-card,#answer-form[data-result="checking"] .feedback-mark{animation:none}}
