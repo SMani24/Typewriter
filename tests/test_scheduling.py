@@ -68,3 +68,14 @@ class SchedulingTests(unittest.TestCase):
             with self.assertRaises(ValueError): self.store.save_settings(changes)
             self.assertEqual(self.store.settings(),before)
         self.store.save_settings({'quiz_interval_mode':'fixed','quiz_interval_min':5,'quiz_interval_max':5})
+
+    def test_short_review_size_persists_and_rejects_invalid_values(self):
+        self.assertEqual(self.store.settings()['review_session_size'],10)
+        for size in (1,25,100):
+            self.store.save_settings({'review_session_size':size})
+            self.assertEqual(Store(self.store.path).settings()['review_session_size'],size)
+        before=self.store.settings()
+        for size in (0,101,True,3.5,'10',None):
+            with self.assertRaises(ValueError):
+                self.store.save_settings({'review_session_size':size,'auto_ai':not before['auto_ai']})
+            self.assertEqual(self.store.settings(),before)
