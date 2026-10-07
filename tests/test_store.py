@@ -76,3 +76,49 @@ class StoreTests(unittest.TestCase):
         self.store.log("info", "Latest event")
         self.assertEqual(len(self.store.logs(1000)), 500)
         self.assertNotIn("logs", self.store.export())
+
+    def test_meaning_quizzes_keep_spelling_stage_and_statistics_separate(self):
+        self.store.edit_word(self.id, {'definition':'Required for a purpose.'})
+        other=self.store.add_words([{'word':'different','definition':'Not the same.'}])['added'][0]
+        self.assertFalse(self.store.attempt(self.id,{'mode':'meaning','answer':str(other)})['correct'])
+        self.assertTrue(self.store.attempt(self.id,{'mode':'meaning','answer':str(self.id)})['correct'])
+        self.assertEqual(self.store.word(self.id)['stage'],0)
+        self.assertEqual(self.store.progress()['reviews'],0)
+        self.assertEqual(self.store.progress()['meanings'],2)
+        self.assertEqual(self.store.progress()['meanings_correct'],1)
+        other_store=Store(Path(self.directory.name)/'meaning-backup.db')
+        other_store.import_backup(self.store.export())
+        self.assertEqual(other_store.progress()['meanings_correct'],1)
+
+    def test_audio_flag_excludes_even_a_verified_recording(self):
+        self.store.edit_word(self.id,{'source':'Cambridge','audio_url':'https://dictionary.cambridge.org/test.mp3'})
+        self.store.set_audio(self.id,verified=True)
+        self.assertTrue(self.store.word(self.id)['audio_eligible'])
+        self.store.set_audio(self.id,flagged=True)
+        self.assertFalse(self.store.word(self.id)['audio_eligible'])
+
+    def test_review_exercises_cannot_all_be_disabled(self):
+        with self.assertRaises(ValueError):
+            self.store.save_settings({k:False for k in ('sentence_enabled','definition_enabled','audio_enabled','meaning_enabled')})
+
+    def test_audio_flags_survive_backup_without_implicitly_trusting_recordings(self):
+        self.store.edit_word(self.id,{'source':'Cambridge','audio_url':'https://dictionary.cambridge.org/audio.mp3'})
+        self.store.set_audio(self.id,flagged=True,verified=True)
+        other=Store(Path(self.directory.name)/'audio-backup.db')
+        other.import_backup(self.store.export())
+        word=other.list_words()[0]
+        self.assertTrue(word['audio_flagged'])
+        self.assertFalse(word['audio_verified'])
+        self.assertFalse(word['audio_eligible'])
+
+    def test_audio_schema_upgrade_preserves_existing_word_and_review_history(self):
+        self.store.attempt(self.id,{'answer':'necessary'})
+        before=self.store.word(self.id)
+        with self.store.db() as db:
+            for column in ('audio_file','audio_verified','audio_flagged'):
+                db.execute(f'ALTER TABLE words DROP COLUMN {column}')
+        migrated=Store(self.store.path)
+        after=migrated.word(self.id)
+        for field in ('word','created','due','stage','reviews'):
+            self.assertEqual(after[field],before[field])
+        self.assertFalse(after['audio_eligible'])

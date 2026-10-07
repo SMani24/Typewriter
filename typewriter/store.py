@@ -6,6 +6,7 @@ import unicodedata
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from .models import normalize_model
 
 DEFAULTS = {
     "proxy_enabled": False, "proxy_type": "socks5h", "proxy_host": "127.0.0.1",
@@ -13,6 +14,8 @@ DEFAULTS = {
     "model": "gemini-flash-latest", "auto_ai": True, "batch_size": 5,
     "daily_budget": 20, "requests_per_minute": 4,
     "review_enabled": True, "drill_enabled": True,
+    "sentence_enabled": True, "definition_enabled": True, "audio_enabled": True,
+    "meaning_enabled": True, "preparation_method": "api", "offline_batch_size": 20,
 }
 
 
@@ -75,6 +78,10 @@ class Store:
                     level TEXT NOT NULL, message TEXT NOT NULL
                 );
             """)
+            columns = {r["name"] for r in db.execute("PRAGMA table_info(words)")}
+            for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''"}.items():
+                if name not in columns:
+                    db.execute(f"ALTER TABLE words ADD COLUMN {name} {definition}")
 
     @contextmanager
     def db(self):
@@ -102,20 +109,23 @@ class Store:
                 if key == "proxy_password" and data[key] == "" and not data.get("clear_proxy_password"):
                     continue
                 values[key] = data[key]
-        for key in ["proxy_enabled", "auto_ai", "review_enabled", "drill_enabled"]:
+        for key in ["proxy_enabled", "auto_ai", "review_enabled", "drill_enabled", "sentence_enabled", "definition_enabled", "audio_enabled", "meaning_enabled"]:
             if not isinstance(values[key], bool):
                 raise ValueError("Choose an on/off setting.")
         if not values["review_enabled"] and not values["drill_enabled"]:
             raise ValueError("Keep at least one practice mode active.")
-        for key, low, high in [("proxy_port", 1, 65535), ("batch_size", 1, 25), ("daily_budget", 1, 2000), ("requests_per_minute", 1, 60)]:
+        if values["review_enabled"] and not any(values[k] for k in ("sentence_enabled", "definition_enabled", "audio_enabled", "meaning_enabled")):
+            raise ValueError("Choose at least one review exercise, or turn off review sessions.")
+        if values["preparation_method"] not in ("api", "offline", "manual"):
+            raise ValueError("Choose Gemini API, another LLM, or manual preparation.")
+        for key, low, high in [("offline_batch_size", 1, 100), ("proxy_port", 1, 65535), ("batch_size", 1, 25), ("daily_budget", 1, 2000), ("requests_per_minute", 1, 60)]:
             if not isinstance(values[key], int) or not low <= values[key] <= high:
                 raise ValueError(f"{key.replace('_', ' ').capitalize()} must be between {low} and {high}.")
         if values["proxy_type"] not in ["http", "socks5h"]:
             raise ValueError("Choose HTTP or SOCKS5.")
         if not isinstance(values["proxy_host"], str) or not re.fullmatch(r"[a-zA-Z0-9.:-]{1,253}", values["proxy_host"]):
             raise ValueError("Enter a proxy hostname or IP address, without a URL prefix.")
-        if not isinstance(values["model"], str) or not re.fullmatch(r"gemini-[a-zA-Z0-9.\-]{1,80}", values["model"]):
-            raise ValueError("Enter a Gemini model name, such as gemini-flash-latest.")
+        values["model"] = normalize_model(values["model"])
         for key in ["proxy_username", "proxy_password"]:
             if not isinstance(values[key], str) or len(values[key]) > 200:
                 raise ValueError("Proxy credentials must be shorter than 200 characters.")
@@ -152,6 +162,7 @@ class Store:
             for row in rows:
                 w = dict(row)
                 w["sources"] = json.loads(w["sources"])
+                w["audio_eligible"] = bool(w["audio_verified"] and not w["audio_flagged"] and (w["audio_file"] or w["audio_url"]))
                 w["clue"] = blank_sentence(w["word"], w["sentence"]) if contains_word(w["word"], w["sentence"]) else ""
                 w["accuracy"] = round(100 * w["correct_reviews"] / w["reviews"]) if w["reviews"] else None
                 w["is_due"] = w["due"] <= now()
@@ -209,28 +220,51 @@ class Store:
         status = "ready" if all(item[k] for k in ["definition", "sentence", "tip"]) else "pending"
         with self.db() as db:
             db.execute("UPDATE words SET definition=?,sentence=?,tip=?,tag=?,sources=?,audio_url=?,updated=?,status=?,enrichment_error='',version=version+1 WHERE id=?", (item["definition"], item["sentence"], item["tip"], item["tag"], json.dumps(sources), audio, now(), status, word_id))
+        if audio != original["audio_url"] and not original["audio_file"]:
+            with self.db() as db:
+                db.execute("UPDATE words SET audio_verified=0 WHERE id=?", (word_id,))
+        return self.word(word_id)
+
+    def set_audio(self, word_id, *, flagged=None, verified=None, file=None):
+        if not self.word(word_id):
+            raise KeyError("Word not found.")
+        updates = {}
+        for key, value in (("audio_flagged", flagged), ("audio_verified", verified)):
+            if value is not None:
+                if not isinstance(value, bool):
+                    raise ValueError("Choose an on/off audio setting.")
+                updates[key] = int(value)
+        if file is not None:
+            if not isinstance(file, str) or file and not re.fullmatch(r"[a-f0-9]{32}\.(mp3|wav|ogg|m4a)", file):
+                raise ValueError("Invalid audio file.")
+            updates["audio_file"] = file
+        if updates:
+            with self.db() as db:
+                db.execute("UPDATE words SET " + ",".join(k + "=?" for k in updates) + " WHERE id=?", (*updates.values(), word_id))
         return self.word(word_id)
 
     def enrich_word(self, word_id, content, source):
-        # Read at commit time: a user may have edited the word during a network request.
         with self.db() as db:
             row = db.execute("SELECT * FROM words WHERE id=?", (word_id,)).fetchone()
-            if not row:
-                return False
-            item = dict(row)
-            sources = json.loads(item["sources"])
-            for field in ["definition", "sentence", "tip"]:
-                value = content.get(field, "")
-                if not isinstance(value, str) or not value.strip() or len(value) > 2000:
-                    continue
-                if field == "sentence" and not contains_word(item["word"], value):
-                    continue
-                if not item[field]:
-                    item[field] = value.strip()
-                    sources[field] = source
-            status = "ready" if all(item[k] for k in ["definition", "sentence", "tip"]) else "pending"
-            db.execute("UPDATE words SET definition=?,sentence=?,tip=?,sources=?,updated=?,status=?,enrichment_error='' WHERE id=?", (item["definition"], item["sentence"], item["tip"], json.dumps(sources), now(), status, word_id))
-            return status == "ready"
+            return self.enrich_row(db, row, content, source) if row else False
+
+    @staticmethod
+    def enrich_row(db, row, content, source):
+        # Read at commit time so material typed during preparation is preserved.
+        item = dict(row)
+        sources = json.loads(item["sources"])
+        for field in ["definition", "sentence", "tip"]:
+            value = content.get(field, "")
+            if not isinstance(value, str) or not value.strip() or len(value) > 2000:
+                continue
+            if field == "sentence" and not contains_word(item["word"], value):
+                continue
+            if not item[field]:
+                item[field] = value.strip()
+                sources[field] = source
+        status = "ready" if all(item[k] for k in ["definition", "sentence", "tip"]) else "pending"
+        db.execute("UPDATE words SET definition=?,sentence=?,tip=?,sources=?,updated=?,status=?,enrichment_error='' WHERE id=?", (item["definition"], item["sentence"], item["tip"], json.dumps(sources), now(), status, item["id"]))
+        return status == "ready"
 
     def delete_word(self, word_id):
         with self.db() as db:
@@ -241,7 +275,7 @@ class Store:
         mode = data.get("mode", "review")
         if not isinstance(answer, str) or not answer.strip() or len(answer) > 200:
             raise ValueError("Type an answer first (up to 200 characters).")
-        if mode not in ["review", "drill", "correction"] or not isinstance(data.get("hinted", False), bool):
+        if mode not in ["review", "drill", "correction", "meaning"] or not isinstance(data.get("hinted", False), bool):
             raise ValueError("Invalid practice mode.")
         elapsed = data.get("elapsed_ms", 0)
         if not isinstance(elapsed, int) or not 0 <= elapsed <= 86400000:
@@ -251,9 +285,20 @@ class Store:
             row = db.execute("SELECT * FROM words WHERE id=?", (word_id,)).fetchone()
             if not row:
                 raise KeyError("Word not found.")
-            correct = normalize_answer(answer) == row["word"]
+            if mode == "meaning":
+                try:
+                    chosen = int(answer)
+                except ValueError:
+                    raise ValueError("Choose a meaning first.") from None
+                choice = db.execute("SELECT definition FROM words WHERE id=?", (chosen,)).fetchone()
+                if not choice or not row["definition"]:
+                    raise ValueError("This meaning is no longer available. Start a new session.")
+                correct = choice["definition"].strip().lower() == row["definition"].strip().lower()
+            else:
+                correct = normalize_answer(answer) == row["word"]
             hinted = data.get("hinted", False)
-            db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created) VALUES (?,?,?,?,?,?,?)", (word_id, answer.strip(), int(correct), mode, int(hinted), elapsed, stamp))
+            recorded_answer = choice["definition"][:200] if mode == "meaning" else answer.strip()
+            db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created) VALUES (?,?,?,?,?,?,?)", (word_id, recorded_answer, int(correct), mode, int(hinted), elapsed, stamp))
             # Drilling, hints and corrections never move a word into a confident state.
             # Only one successful promotion per UTC day, even across repeat sessions.
             if mode == "review":
@@ -268,13 +313,13 @@ class Store:
                     interval = 0
                 due = (datetime.now(timezone.utc) + (timedelta(days=interval) if interval else timedelta(minutes=10))).isoformat()
                 db.execute("UPDATE words SET stage=?,due=? WHERE id=?", (stage, due, word_id))
-        return {"correct": correct, "expected": row["word"], "answer": answer.strip(), "tip": row["tip"], "word": self.word(word_id)}
+        return {"correct": correct, "expected": row["definition"] if mode == "meaning" else row["word"], "answer": answer.strip(), "tip": row["tip"], "word": self.word(word_id)}
 
     def progress(self):
         with self.db() as db:
             history = [dict(r) for r in db.execute("SELECT substr(created,1,10) AS day, COUNT(*) AS total, SUM(correct) AS correct FROM attempts WHERE mode='review' AND hinted=0 GROUP BY day ORDER BY day DESC LIMIT 30")]
-            mistakes = [dict(r) for r in db.execute("SELECT w.word,a.answer,COUNT(*) AS count FROM attempts a JOIN words w ON w.id=a.word_id WHERE a.correct=0 GROUP BY w.word,a.answer ORDER BY count DESC LIMIT 8")]
-            totals = dict(db.execute("SELECT COUNT(CASE WHEN mode='review' AND hinted=0 THEN 1 END) AS reviews, COUNT(CASE WHEN mode='review' AND hinted=0 AND correct=1 THEN 1 END) AS correct, COUNT(CASE WHEN mode='drill' THEN 1 END) AS drills FROM attempts").fetchone())
+            mistakes = [dict(r) for r in db.execute("SELECT w.word,a.answer,COUNT(*) AS count FROM attempts a JOIN words w ON w.id=a.word_id WHERE a.correct=0 AND a.mode!='meaning' GROUP BY w.word,a.answer ORDER BY count DESC LIMIT 8")]
+            totals = dict(db.execute("SELECT COUNT(CASE WHEN mode='review' AND hinted=0 THEN 1 END) AS reviews, COUNT(CASE WHEN mode='review' AND hinted=0 AND correct=1 THEN 1 END) AS correct, COUNT(CASE WHEN mode='drill' THEN 1 END) AS drills, COUNT(CASE WHEN mode='meaning' THEN 1 END) AS meanings, COUNT(CASE WHEN mode='meaning' AND correct=1 THEN 1 END) AS meanings_correct FROM attempts").fetchone())
         return {"history": history, "mistakes": mistakes, **totals}
 
     def export(self):
@@ -308,9 +353,14 @@ class Store:
                     raise ValueError("Invalid dates in backup.") from None
             if not isinstance(w.get("stage"), int) or not 0 <= w["stage"] <= 5:
                 raise ValueError("Invalid review stage.")
+            if w.get("audio_flagged", 0) not in (0, 1):
+                raise ValueError("Invalid pronunciation flag in backup.")
+            audio_url = w.get("audio_url", "")
+            if not isinstance(audio_url, str) or audio_url and not re.fullmatch(r"https://dictionary\.cambridge\.org/[^\s]+", audio_url):
+                raise ValueError("Invalid pronunciation URL in backup.")
             validated.append((w, item))
         for a in attempts:
-            if not isinstance(a, dict) or a.get("word_id") not in ids or a.get("mode") not in ["review", "drill", "correction"] or a.get("correct") not in [0, 1] or a.get("hinted") not in [0, 1] or not isinstance(a.get("answer"), str) or len(a["answer"]) > 200 or not isinstance(a.get("elapsed_ms"), int) or not 0 <= a["elapsed_ms"] <= 86400000:
+            if not isinstance(a, dict) or a.get("word_id") not in ids or a.get("mode") not in ["review", "drill", "correction", "meaning"] or a.get("correct") not in [0, 1] or a.get("hinted") not in [0, 1] or not isinstance(a.get("answer"), str) or len(a["answer"]) > 200 or not isinstance(a.get("elapsed_ms"), int) or not 0 <= a["elapsed_ms"] <= 86400000:
                 raise ValueError("Invalid practice records in backup.")
             try:
                 if datetime.fromisoformat(a["created"]).tzinfo is None:
@@ -320,10 +370,12 @@ class Store:
         added, id_map = 0, {}
         with self.db() as db:
             for original, item in validated:
-                if db.execute("SELECT id FROM words WHERE word=?", (item["word"],)).fetchone():
+                existing = db.execute("SELECT id FROM words WHERE word=?", (item["word"],)).fetchone()
+                if existing:
                     continue
                 status = "ready" if all(item[k] for k in ["definition", "sentence", "tip"]) else "pending"
                 cur = db.execute("INSERT INTO words (word,definition,sentence,tip,tag,sources,created,updated,due,stage,status) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (item["word"], item["definition"], item["sentence"], item["tip"], item["tag"], json.dumps({k: "imported" for k in ["definition", "sentence", "tip"] if item[k]}), original["created"], original["updated"], original["due"], original["stage"], status))
+                db.execute("UPDATE words SET audio_flagged=?,audio_url=? WHERE id=?", (original.get("audio_flagged", 0), original.get("audio_url", ""), cur.lastrowid))
                 id_map[original["id"]] = cur.lastrowid
                 added += 1
             for a in attempts:

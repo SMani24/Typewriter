@@ -10,6 +10,8 @@ from .store import Store
 from .network import Network, NetworkError
 from .dictionary import Dictionary
 from .enrichment import Enrichment, parse_keys
+from .preparation import Preparation
+from .models import ModelAccessError
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -25,8 +27,9 @@ def create_app(data_dir=None, keys_path=None, background=True):
     network = Network(store)
     dictionary = Dictionary(store, network)
     enrichment = Enrichment(store, network, keys)
+    preparation = Preparation(store)
     token = secrets.token_urlsafe(32)
-    app.extensions.update(store=store, network=network, dictionary=dictionary, enrichment=enrichment)
+    app.extensions.update(store=store, network=network, dictionary=dictionary, enrichment=enrichment, preparation=preparation)
 
     @app.before_request
     def protect_local_app():
@@ -104,7 +107,29 @@ def create_app(data_dir=None, keys_path=None, background=True):
 
     @app.get("/api/words/<int:word_id>/audio")
     def audio(word_id):
-        return send_file(dictionary.audio(word_id), mimetype="audio/mpeg", max_age=0)
+        return send_file(dictionary.audio(word_id, preview=request.args.get("preview") == "1"), max_age=0)
+
+    @app.patch("/api/words/<int:word_id>/audio")
+    def audio_settings(word_id):
+        data = body()
+        return jsonify(store.set_audio(word_id, flagged=data.get("flagged"), verified=data.get("verified")))
+
+    @app.post("/api/words/<int:word_id>/audio")
+    def upload_audio(word_id):
+        file = request.files.get("audio")
+        if not file:
+            raise ValueError("Choose an audio recording to upload.")
+        return jsonify(dictionary.upload(word_id, file))
+
+    @app.delete("/api/words/<int:word_id>/audio")
+    def remove_uploaded_audio(word_id):
+        word = store.word(word_id)
+        if not word:
+            raise KeyError("Word not found.")
+        result = store.set_audio(word_id, file="", verified=False)
+        if word["audio_file"]:
+            (directory / "audio" / word["audio_file"]).unlink(missing_ok=True)
+        return jsonify(result)
 
     @app.post("/api/dictionary")
     def lookup():
@@ -149,6 +174,32 @@ def create_app(data_dir=None, keys_path=None, background=True):
     @app.get("/api/enrichment")
     def job():
         return jsonify(enrichment.snapshot())
+
+    @app.post("/api/models/refresh")
+    def models():
+        available = enrichment.pool.keys()
+        if not available:
+            raise ValueError("Add a Gemini key first. Model discovery uses the configured network route.")
+        for key in available:
+            try:
+                return jsonify(models=enrichment.catalog.list(key))
+            except ModelAccessError:
+                continue
+        raise ValueError("None of the configured keys could load model metadata. Check API access or use prompt export/import.")
+
+    @app.post("/api/preparation/export")
+    def export_preparation():
+        data = body()
+        stream, name = preparation.export(data.get("ids"), data.get("size"))
+        return send_file(stream, mimetype="application/zip", as_attachment=True, download_name=name)
+
+    @app.post("/api/preparation/preview")
+    def preview_preparation():
+        return jsonify(preparation.preview(body().get("text")))
+
+    @app.post("/api/preparation/import")
+    def import_preparation():
+        return jsonify(preparation.apply(body().get("text")))
 
     @app.get("/api/export")
     def export():

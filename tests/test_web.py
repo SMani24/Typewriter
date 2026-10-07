@@ -49,3 +49,39 @@ class WebTests(unittest.TestCase):
         self.assertIn("Preparation started for 5 words.", response.text)
         self.assertIn("typewriter-log.txt", response.headers["Content-Disposition"])
         self.assertEqual(len(self.client.get("/api/state").json["logs"]), 1)
+
+    def test_upload_replaces_flagged_audio_and_validates_content(self):
+        import io,wave
+        response=self.client.post('/api/words',json={'words':[{'word':'highest'}]},headers=self.headers)
+        word_id=response.json['added'][0]
+        self.client.patch(f'/api/words/{word_id}/audio',json={'flagged':True},headers=self.headers)
+        bad=self.client.post(f'/api/words/{word_id}/audio',data={'audio':(io.BytesIO(b'not an audio file'),'bad.mp3')},headers=self.headers)
+        self.assertEqual(bad.status_code,400)
+        clip=io.BytesIO()
+        with wave.open(clip,'wb') as audio:
+            audio.setparams((1,2,8000,0,'NONE','not compressed'));audio.writeframes(b'\x00\x00'*800)
+        content=clip.getvalue()
+        response=self.client.post(f'/api/words/{word_id}/audio',data={'audio':(io.BytesIO(content),'voice.wav')},headers=self.headers)
+        self.assertTrue(response.json['audio_eligible'])
+        self.assertFalse(response.json['audio_flagged'])
+        self.app.extensions['store'].edit_word(word_id,{'source':'Cambridge','audio_url':'https://dictionary.cambridge.org/other.mp3'})
+        self.assertTrue(self.app.extensions['store'].word(word_id)['audio_eligible'])
+        with self.client.get(f'/api/words/{word_id}/audio') as response:
+            self.assertEqual(response.data,content)
+        self.client.patch(f'/api/words/{word_id}/audio',json={'flagged':True},headers=self.headers)
+        self.assertEqual(self.client.get(f'/api/words/{word_id}/audio').status_code,400)
+        with self.client.get(f'/api/words/{word_id}/audio?preview=1') as response:
+            self.assertEqual(response.data,content)
+
+    def test_prompt_export_roundtrip_works_without_api_keys(self):
+        import io,json,zipfile
+        self.client.post('/api/words',json={'words':[{'word':'highest'}]},headers=self.headers)
+        response=self.client.post('/api/preparation/export',json={'size':1},headers=self.headers)
+        self.assertEqual(response.status_code,200)
+        with zipfile.ZipFile(io.BytesIO(response.data)) as archive:
+            text=archive.read(next(n for n in archive.namelist() if n!='README.md')).decode()
+        payload=json.loads(text.split('```json\n')[1].split('\n```')[0])
+        payload['words'][0].update(definition='Above all others.',sentence='This is the highest point.',tip='High + est.')
+        reply={'text':json.dumps(payload)}
+        self.assertEqual(self.client.post('/api/preparation/preview',json=reply,headers=self.headers).status_code,200)
+        self.assertEqual(self.client.post('/api/preparation/import',json=reply,headers=self.headers).json['updated'],1)

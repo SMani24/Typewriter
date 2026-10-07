@@ -20,6 +20,7 @@ class NetworkTests(unittest.TestCase):
         self.keys.write_text("first-fake-key-for-unit-tests\nsecond-fake-key-for-unit-tests\n")
         self.enrichment = Enrichment(self.store, self.network, self.keys)
         self.enrichment.pool.pace = Mock()
+        self.enrichment.catalog.validate = Mock()
 
     def test_proxy_is_explicit_for_http_and_https(self):
         self.store.save_settings({"proxy_enabled": True, "proxy_host": "localhost", "proxy_port": 1234, "proxy_username": "a@b", "proxy_password": "p:q"})
@@ -174,3 +175,31 @@ class NetworkTests(unittest.TestCase):
             with self.assertRaises(NetworkError):
                 self.network.request("GET", "https://example.test")
         self.assertNotIn(secret, json.dumps(self.store.logs()))
+
+    def test_cambridge_audio_requires_exact_entry_headword(self):
+        html='<div class="entry-body__el"><span class="hw dhw">high</span><div class="uk"><source type="audio/mpeg" src="/media/high.mp3"></div></div>'
+        self.assertEqual(Dictionary.parse('highest',html,'https://dictionary.cambridge.org/dictionary/english/high')['audio'],{})
+        self.assertEqual(Dictionary.parse('heighest',html,'https://dictionary.cambridge.org/dictionary/english/high')['audio'],{})
+        mixed=html+'<div class="entry-body__el"><span class="hw dhw">highest</span><div class="uk"><source type="audio/mpeg" src="/media/highest.mp3"></div></div>'
+        self.assertTrue(Dictionary.parse('highest',mixed,'https://dictionary.cambridge.org/')['audio']['uk'].endswith('/highest.mp3'))
+
+    def test_offline_mode_never_schedules_or_starts_gemini(self):
+        self.store.save_settings({'preparation_method':'offline'})
+        self.store.add_words([{'word':w} for w in ('necessary','different','environment','highest','regular')])
+        self.enrichment.auto_schedule()
+        self.assertIsNone(self.enrichment.timer)
+        with self.assertRaises(ValueError): self.enrichment.start()
+
+    def test_switching_to_offline_stops_future_batches(self):
+        self.store.save_settings({'batch_size':1})
+        ids=self.store.add_words([{'word':'necessary'},{'word':'different'}])['added']
+        def first_batch(words):
+            self.store.save_settings({'preparation_method':'offline'})
+            w=words[0]['word']
+            return {w:{'definition':'Needed','sentence':f'This is {w}.','tip':'Notice each letter.'}}
+        self.enrichment.generate=Mock(side_effect=first_batch)
+        self.enrichment.run(ids)
+        self.assertEqual(self.enrichment.generate.call_count,1)
+        self.assertEqual(self.store.word(ids[0])['status'],'ready')
+        self.assertEqual(self.store.word(ids[1])['status'],'pending')
+        self.assertIn('another preparation method',self.enrichment.snapshot()['error'])

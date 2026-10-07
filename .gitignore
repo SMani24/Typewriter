@@ -16,3 +16,6 @@ typewriter-backup*.json
 .DS_Store
 *.sqlite*
 *.log
+
+typewriter-preparation*.zip
+typewriter-preparation*.md
