@@ -39,6 +39,9 @@ async function api(path, method = 'GET', data) {
 }
 function toast(message, error = false) {
   clearTimeout(toastTimer);
+  // Native modal dialogs sit above the page, including any page-level z-index.
+  const host = $$('dialog[open]').at(-1) || document.body;
+  host.append($('#toast'));
   $('#toast').textContent = message;
   $('#toast').classList.toggle('error', error);
   $('#toast').hidden = false;
@@ -590,7 +593,7 @@ async function listen(automatic = false) {
     // Recover the server's useful lookup/proxy error when a media request failed.
     const response = await fetch(url);
     if (sequence !== audioSequence) return;
-    if (!response.ok) {const result = await response.json();throw new Error(result.error || 'Pronunciation is unavailable.');}
+    if (!response.ok) {const result = await response.json();const message = result.error || 'Pronunciation is unavailable.';$('#playback-status').textContent = message;throw new Error(message);}
     throw new Error('This pronunciation could not be played. Try another word or browser.');
   }
 }
@@ -852,7 +855,10 @@ $('#import-file').addEventListener('change',event => guarded(async () => {const 
 $('#word-dialog').addEventListener('close',() => {$('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();});
 $('#practice-dialog').addEventListener('cancel',event => {event.preventDefault();if ($('#practice-summary').hidden) finishPractice();else actions['close-practice']();});
 window.addEventListener('hashchange',() => navigate(location.hash.slice(1)));
-$$('dialog').forEach(dialog => dialog.addEventListener('close',() => setTimeout(showFailure,0)));
+$$('dialog').forEach(dialog => dialog.addEventListener('close',() => {
+  if ($('#toast').parentElement === dialog) {$('#toast').hidden = true;document.body.append($('#toast'));}
+  setTimeout(showFailure,0);
+}));
 $('#failure-dialog').addEventListener('cancel',() => {pendingFailure=null;});
 $('#prompt-reevaluate').addEventListener('change',updatePromptCount);
 ['quiz_interval_mode','quiz_interval_fixed','quiz_interval_min','quiz_interval_max','meaning_enabled'].forEach(name => $('#settings-form').elements[name].addEventListener('input',event=>updateQuizRhythm(event.target)));
