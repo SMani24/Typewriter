@@ -88,7 +88,10 @@ don't count as another word, and unanswered skips don't count. If meaning quizze
 the only available exercise, the session contains quizzes throughout.
 Press **Enter** after quiz feedback when you're ready to continue.
 
-Check a pronunciation in the word editor before including it in audio-only exercises.
+Choose **UK or US pronunciation** in Settings. Dictionary playback and previews use
+that accent; unavailable accents are reported rather than replaced silently. Uploaded
+recordings take precedence. Check a pronunciation in the word editor before including
+it in audio-only exercises.
 Existing Cambridge recordings start unchecked. Cambridge lookups only offer audio from
 an exact matching headword, avoiding recordings for a base word or redirected typo.
 **Wrong pronunciation?** excludes a recording; an uploaded MP3, WAV, OGG, or M4A

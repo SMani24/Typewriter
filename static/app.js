@@ -202,7 +202,7 @@ function renderKeys() {
 function settingsPayload() {
   const form = $('#settings-form'), result = {};
   ['proxy_enabled','auto_ai','review_enabled','drill_enabled','sentence_enabled','definition_enabled','audio_enabled','meaning_enabled','clear_proxy_password'].forEach(k => result[k] = form.elements[k].checked);
-  ['proxy_type','proxy_host','proxy_username','proxy_password','model','preparation_method'].forEach(k => result[k] = form.elements[k].value.trim());
+  ['proxy_type','proxy_host','proxy_username','proxy_password','model','preparation_method','pronunciation_accent'].forEach(k => result[k] = form.elements[k].value.trim());
   ['proxy_port','batch_size','daily_budget','requests_per_minute','offline_batch_size','review_session_size'].forEach(k => result[k] = Number(form.elements[k].value));
   result.quiz_interval_mode = form.elements.quiz_interval_mode.value;
   result.quiz_interval_min = Number(form.elements[result.quiz_interval_mode === 'fixed' ? 'quiz_interval_fixed' : 'quiz_interval_min'].value);
@@ -265,14 +265,14 @@ async function saveWord(event) {
     let result;
     if (editingId) {
       const data = Object.fromEntries(['definition','sentence','tip','tag'].map(k => [k,form.elements[k].value]));
-      if (dictionaryApplied) {data.source = 'Cambridge';data.audio_url = dictionaryData.audio.uk || dictionaryData.audio.us || '';}
+      if (dictionaryApplied) {data.source = 'Cambridge';data.audio_url = dictionaryData.audio[state.settings.pronunciation_accent || 'uk'] || '';data.audio_urls = dictionaryData.audio;}
       result = await api('/words/' + editingId,'PATCH',data);
       toast('Word updated.');
     } else {
       const words = addMode === 'bulk' ? form.elements.bulk.value.split(/[\n,;]/).map(w => w.trim()).filter(Boolean).map(word => ({word,tag:form.elements.tag.value})) : [Object.fromEntries(['word','definition','sentence','tip','tag'].map(k => [k,form.elements[k].value]))];
       result = await api('/words','POST',{words});
       if (dictionaryApplied && result.added.length && addMode === 'single') {
-        await api('/words/' + result.added[0],'PATCH',{definition:form.elements.definition.value,sentence:form.elements.sentence.value,source:'Cambridge',audio_url:dictionaryData.audio.uk || dictionaryData.audio.us || ''});
+        await api('/words/' + result.added[0],'PATCH',{definition:form.elements.definition.value,sentence:form.elements.sentence.value,source:'Cambridge',audio_url:dictionaryData.audio[state.settings.pronunciation_accent || 'uk'] || '',audio_urls:dictionaryData.audio});
       }
       toast(`${result.added.length} word${result.added.length === 1 ? '' : 's'} added.${result.duplicates.length ? ` ${result.duplicates.length} already in your notebook.` : ''}`);
     }
@@ -578,7 +578,7 @@ async function listen(automatic = false) {
   if (!practice || $('#practice-active').hidden || currentWord().audio_flagged) return;
   const id = currentWord().id;
   const sequence = ++audioSequence, audio = $('#pronunciation');
-  const url = `/api/words/${id}/audio`;
+  const url = `/api/words/${id}/audio?accent=${state.settings.pronunciation_accent || 'uk'}`;
   audio.pause();
   // Play directly from our own server. Blob URLs were blocked by media-src 'self'.
   // Starting play before awaiting also keeps it attached to the user's click.
@@ -625,7 +625,7 @@ async function changeWordAudio(data) {
 }
 async function previewAudio() {
   const audio = $('#audio-preview');
-  audio.src = `/api/words/${editingId}/audio?preview=1`;
+  audio.src = `/api/words/${editingId}/audio?preview=1&accent=${state.settings.pronunciation_accent || 'uk'}`;
   $('#audio-status').textContent = 'Loading pronunciation…';
   try {await audio.play();await refresh();renderWordAudio();}
   catch (error) {

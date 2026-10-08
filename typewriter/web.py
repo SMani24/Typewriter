@@ -111,7 +111,7 @@ def create_app(data_dir=None, keys_path=None, background=True):
 
     @app.get("/api/words/<int:word_id>/audio")
     def audio(word_id):
-        return send_file(dictionary.audio(word_id, preview=request.args.get("preview") == "1"), max_age=0)
+        return send_file(dictionary.audio(word_id, preview=request.args.get("preview") == "1", accent=request.args.get("accent")), max_age=0)
 
     @app.patch("/api/words/<int:word_id>/audio")
     def audio_settings(word_id):

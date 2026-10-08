@@ -64,7 +64,10 @@ class Dictionary:
                     break
         return {"word": word, "senses": senses, "audio": audio, "source_url": url, "audio_matches_word": bool(audio)}
 
-    def audio(self, word_id, preview=False):
+    def audio(self, word_id, preview=False, accent=None):
+        accent = accent or self.store.settings()["pronunciation_accent"]
+        if accent not in ("uk", "us"):
+            raise ValueError("Choose UK or US pronunciation.")
         word = self.store.word(word_id)
         if not word:
             raise KeyError("Word not found.")
@@ -75,15 +78,17 @@ class Dictionary:
             if not path.is_file():
                 raise ValueError("Your uploaded recording is missing. Upload it again in the word editor.")
             return path
-        url = word["audio_url"]
+        url = word["audio_urls"].get(accent)
+        # Old notebooks stored one URL, using UK by default. Resolve US separately.
+        if not word["audio_urls"] and accent == "uk":
+            url = word["audio_url"]
         if not url:
             lookup = self.lookup(word["word"])
-            url = lookup["audio"].get("uk") or lookup["audio"].get("us")
-            if url:
-                with self.store.db() as db:
-                    db.execute("UPDATE words SET audio_url=? WHERE id=?", (url, word_id))
+            url = lookup["audio"].get(accent)
+            with self.store.db() as db:
+                db.execute("UPDATE words SET audio_urls=?,audio_url=? WHERE id=?", (json.dumps(lookup["audio"]), url or word["audio_url"], word_id))
         if not url or urlparse(url).netloc != "dictionary.cambridge.org":
-            raise ValueError("No pronunciation available for this word.")
+            raise ValueError(f"No {accent.upper()} pronunciation available for this word. Try the other accent in Settings or upload a recording.")
         name = "audio:" + url
         directory = self.store.path.parent / "audio"
         import hashlib

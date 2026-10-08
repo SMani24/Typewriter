@@ -65,3 +65,5 @@ dialog{border:1px solid #dce1d2;color:var(--ink);background:var(--white);border-
 .review-actions{display:flex;flex-wrap:wrap;gap:10px}.hero .review-actions .button{min-width:0}.session-length{margin:22px 0;padding-top:18px;border-top:1px solid var(--line)}.session-length label{max-width:220px}.session-length .field-note{margin-top:9px}.session-length strong{font-weight:500}
 /* Keep warnings in the native modal's top layer. */
 dialog>.toast{position:sticky;bottom:0;left:auto;transform:none;width:auto;max-width:100%;margin-top:16px;font-size:12px;box-shadow:0 4px 15px #193e3522}
+
+.accent-setting{margin:20px 0}.accent-setting select{max-width:280px}

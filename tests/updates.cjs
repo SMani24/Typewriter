@@ -62,14 +62,25 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     async function end() {await page.keyboard.press('Escape');await page.locator('[data-action="close-practice"]').click();}
     await review('missing');
     await page.locator('[data-action="listen"]').click();
-    await page.waitForFunction(()=>document.querySelector('#playback-status').textContent==='No pronunciation available for this word.');
+    await page.waitForFunction(()=>document.querySelector('#playback-status').textContent.includes('No UK pronunciation available'));
     assert.equal(await page.locator('#toast').evaluate(el=>el.parentElement.id),'practice-dialog');
     assert(await page.locator('#toast').isVisible());
     await page.keyboard.press('Alt+p');
-    await page.waitForFunction(()=>document.querySelector('#toast').textContent==='No pronunciation available for this word.');
+    await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('No UK pronunciation available'));
     assert.equal(await page.locator('#toast').evaluate(el=>el.parentElement.id),'practice-dialog');
     await end();
 
+    await page.locator('.nav-item[data-page="settings"]').click();
+    await page.locator('select[name="pronunciation_accent"]').selectOption('us');
+    await page.getByRole('button',{name:'Save settings',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#toast').textContent==='Settings saved.');
+    await page.reload();await page.waitForSelector('#app-content:not([hidden])');
+    assert.equal(await page.locator('select[name="pronunciation_accent"]').inputValue(),'us');
+    await review('necessary');
+    await page.locator('[data-action="listen"]').click();
+    await page.waitForFunction(()=>document.querySelector('#pronunciation').currentTime>0);
+    assert((await page.locator('#pronunciation').getAttribute('src')).includes('accent=us'));
+    await end();
     assert.deepEqual(errors,[]);
     console.log('Update checks passed: missing pronunciation warnings stay in front of practice for clicks and keyboard shortcuts.');
   } finally {

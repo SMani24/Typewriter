@@ -18,6 +18,7 @@ DEFAULTS = {
     "meaning_enabled": True, "preparation_method": "api", "offline_batch_size": 20,
     "quiz_interval_mode": "fixed", "quiz_interval_min": 5, "quiz_interval_max": 5,
     "review_session_size": 10,
+    "pronunciation_accent": "uk",
 }
 
 
@@ -52,6 +53,12 @@ def validate_distractors(values, definition):
     values = [v.strip() for v in values]
     if len({v.casefold() for v in [definition.strip(), *values]}) != 4:
         raise ValueError("Quiz options must differ from each other and the correct meaning.")
+    return values
+
+
+def validate_audio_urls(values):
+    if not isinstance(values, dict) or any(k not in ("uk", "us") or not isinstance(v, str) or not re.fullmatch(r"https://dictionary\.cambridge\.org/[^\s]+", v) for k, v in values.items()):
+        raise ValueError("Unsupported pronunciation URLs. Use UK/US Cambridge recordings.")
     return values
 
 
@@ -90,7 +97,7 @@ class Store:
                 );
             """)
             columns = {r["name"] for r in db.execute("PRAGMA table_info(words)")}
-            for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''", "meaning_flagged": "INTEGER NOT NULL DEFAULT 0", "distractors": "TEXT NOT NULL DEFAULT '[]'"}.items():
+            for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''", "meaning_flagged": "INTEGER NOT NULL DEFAULT 0", "distractors": "TEXT NOT NULL DEFAULT '[]'", "audio_urls": "TEXT NOT NULL DEFAULT '{}'"}.items():
                 if name not in columns:
                     db.execute(f"ALTER TABLE words ADD COLUMN {name} {definition}")
 
@@ -129,6 +136,8 @@ class Store:
             raise ValueError("Choose at least one review exercise, or turn off review sessions.")
         if values["preparation_method"] not in ("api", "offline", "manual"):
             raise ValueError("Choose Gemini API, another LLM, or manual preparation.")
+        if values["pronunciation_accent"] not in ("uk", "us"):
+            raise ValueError("Choose UK or US pronunciation.")
         if values["quiz_interval_mode"] not in ("fixed", "range"):
             raise ValueError("Choose a fixed quiz interval or a random range.")
         for key in ("quiz_interval_min", "quiz_interval_max"):
@@ -169,6 +178,7 @@ class Store:
             return json.loads(row["value"]) if row else None
 
     def list_words(self):
+        accent = self.settings()["pronunciation_accent"]
         with self.db() as db:
             rows = db.execute("""SELECT w.*,
                 COUNT(CASE WHEN a.mode='review' AND a.hinted=0 THEN 1 END) AS reviews,
@@ -192,7 +202,9 @@ class Store:
                 w = dict(row)
                 w["sources"] = json.loads(w["sources"])
                 w["distractors"] = json.loads(w["distractors"])
-                w["audio_eligible"] = bool(w["audio_verified"] and not w["audio_flagged"] and (w["audio_file"] or w["audio_url"]))
+                w["audio_urls"] = json.loads(w["audio_urls"])
+                selected_audio = w["audio_urls"].get(accent) if w["audio_urls"] else w["audio_url"] if accent == "uk" else ""
+                w["audio_eligible"] = bool(w["audio_verified"] and not w["audio_flagged"] and (w["audio_file"] or selected_audio))
                 w["clue"] = blank_sentence(w["word"], w["sentence"]) if contains_word(w["word"], w["sentence"]) else ""
                 w["accuracy"] = round(100 * w["correct_reviews"] / w["reviews"]) if w["reviews"] else None
                 w["is_due"] = w["due"] <= now()
@@ -265,14 +277,16 @@ class Store:
             if field in data and (item[field] != original[field] or data.get("source") == "Cambridge" and field in ["definition", "sentence"]):
                 sources[field] = "Cambridge" if data.get("source") == "Cambridge" and field in ["definition", "sentence"] else "manual"
         audio = data.get("audio_url", original["audio_url"]) if data.get("source") == "Cambridge" else original["audio_url"]
-        if audio and not re.fullmatch(r"https://dictionary\.cambridge\.org/[^\s]+", audio):
+        audio_urls = validate_audio_urls(data.get("audio_urls", original["audio_urls"])) if data.get("source") == "Cambridge" else original["audio_urls"]
+        if not isinstance(audio, str) or audio and not re.fullmatch(r"https://dictionary\.cambridge\.org/[^\s]+", audio):
             raise ValueError("Unsupported pronunciation URL.")
         status = "ready" if all(item[k] for k in ["definition", "sentence", "tip"]) else "pending"
         with self.db() as db:
             db.execute("UPDATE words SET definition=?,sentence=?,tip=?,tag=?,sources=?,audio_url=?,updated=?,status=?,enrichment_error='',version=version+1 WHERE id=?", (item["definition"], item["sentence"], item["tip"], item["tag"], json.dumps(sources), audio, now(), status, word_id))
+            db.execute("UPDATE words SET audio_urls=? WHERE id=?", (json.dumps(audio_urls), word_id))
             if item["definition"] != original["definition"]:
                 db.execute("UPDATE words SET meaning_flagged=0,distractors='[]' WHERE id=?", (word_id,))
-        if audio != original["audio_url"] and not original["audio_file"]:
+        if (audio != original["audio_url"] or audio_urls != original["audio_urls"]) and not original["audio_file"]:
             with self.db() as db:
                 db.execute("UPDATE words SET audio_verified=0 WHERE id=?", (word_id,))
         return self.word(word_id)
@@ -422,6 +436,7 @@ class Store:
             attempts = [dict(r) for r in db.execute("SELECT * FROM attempts")]
         for word in words:
             word["distractors"] = json.loads(word["distractors"])
+            word["audio_urls"] = json.loads(word["audio_urls"])
         return {"format": "typewriter", "version": 1, "exported": now(), "words": words, "attempts": attempts}
 
     def import_backup(self, data):
@@ -461,6 +476,7 @@ class Store:
             audio_url = w.get("audio_url", "")
             if not isinstance(audio_url, str) or audio_url and not re.fullmatch(r"https://dictionary\.cambridge\.org/[^\s]+", audio_url):
                 raise ValueError("Invalid pronunciation URL in backup.")
+            validate_audio_urls(w.get("audio_urls", {}))
             validated.append((w, item))
         for a in attempts:
             if not isinstance(a, dict) or a.get("word_id") not in ids or a.get("mode") not in ["review", "drill", "correction", "meaning"] or a.get("correct") not in [0, 1] or a.get("hinted") not in [0, 1] or not isinstance(a.get("answer"), str) or len(a["answer"]) > 200 or not isinstance(a.get("elapsed_ms"), int) or not 0 <= a["elapsed_ms"] <= 86400000:
@@ -479,6 +495,7 @@ class Store:
                 status = "ready" if all(item[k] for k in ["definition", "sentence", "tip"]) else "pending"
                 cur = db.execute("INSERT INTO words (word,definition,sentence,tip,tag,sources,created,updated,due,stage,status) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (item["word"], item["definition"], item["sentence"], item["tip"], item["tag"], json.dumps({k: "imported" for k in ["definition", "sentence", "tip"] if item[k]}), original["created"], original["updated"], original["due"], original["stage"], status))
                 db.execute("UPDATE words SET audio_flagged=?,audio_url=? WHERE id=?", (original.get("audio_flagged", 0), original.get("audio_url", ""), cur.lastrowid))
+                db.execute("UPDATE words SET audio_urls=? WHERE id=?", (json.dumps(original.get("audio_urls", {})), cur.lastrowid))
                 db.execute("UPDATE words SET meaning_flagged=?,distractors=? WHERE id=?", (original.get("meaning_flagged", 0), json.dumps(original.get("distractors", [])), cur.lastrowid))
                 id_map[original["id"]] = cur.lastrowid
                 added += 1
