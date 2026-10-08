@@ -69,6 +69,11 @@ through 1, 3, 7, 14, and 30-day intervals, with at most one promotion per day. A
 or hint brings the word back after ten minutes. Selecting words allows an earlier review.
 Quiz questions use their own meaning results to choose words, separately from spelling.
 
+Words with at least two misses in their last eight unaided spelling reviews appear
+as **Worth a drill** on Today and in the notebook and word picker. Three consecutive
+correct unaided reviews clear the suggestion; a new struggle can bring it back.
+Hinted answers, corrections, quizzes, and drill repetitions do not establish recall.
+
 Short reviews use up to **ten due spelling words** by default: a convenient session
 length, independent of how words are ranked. Change **Words in a short review** in
 Settings to any value from 1–100; selected reviews use the whole selection.

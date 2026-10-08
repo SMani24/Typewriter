@@ -192,6 +192,7 @@ class Store:
                 ROW_NUMBER() OVER (PARTITION BY word_id,mode,hinted ORDER BY id DESC) AS position
                 FROM attempts WHERE mode IN ('review','meaning')
             ) SELECT word_id,mode,hinted,COUNT(*) AS total,SUM(correct) AS correct,
+                MIN(CASE WHEN correct=0 THEN position END) AS first_miss,
                 MAX(CASE WHEN position=1 THEN id END) AS last_id,
                 MAX(CASE WHEN position=1 THEN correct END) AS last_correct,
                 MAX(CASE WHEN position=1 THEN created END) AS last_created
@@ -218,6 +219,9 @@ class Store:
                 w["recent_reviews"] = recall.get("total", 0)
                 w["recent_accuracy"] = round(100 * recall["correct"] / recall["total"]) if recall else None
                 w["needs_help"] = bool(latest and (latest is assisted or not latest["last_correct"]))
+                w["recent_mistakes"] = recall.get("total", 0) - recall.get("correct", 0)
+                w["recall_streak"] = recall["first_miss"] - 1 if recall.get("first_miss") else recall.get("total", 0)
+                w["drill_recommended"] = w["recent_mistakes"] >= 2 and (w["recall_streak"] < 3 or w["needs_help"])
                 overdue = max(0, (timestamp - datetime.fromisoformat(w["due"])).total_seconds() / 86400)
                 w["review_priority"] = self.practice_priority(recall, w["needs_help"], overdue)
                 meaning_age = max(0, (timestamp - datetime.fromisoformat(meanings["last_created"])).total_seconds() / 86400) if meanings else 0

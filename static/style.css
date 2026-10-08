@@ -67,3 +67,5 @@ dialog{border:1px solid #dce1d2;color:var(--ink);background:var(--white);border-
 dialog>.toast{position:sticky;bottom:0;left:auto;transform:none;width:auto;max-width:100%;margin-top:16px;font-size:12px;box-shadow:0 4px 15px #193e3522}
 
 .accent-setting{margin:20px 0}.accent-setting select{max-width:280px}
+
+.drill-suggestions{width:100%;margin-top:23px;padding-top:18px;border-top:1px solid #d9e0cf}.drill-suggestions>.eyebrow{font-size:8px;letter-spacing:1.5px}.drill-suggestion{display:flex;align-items:center;justify-content:space-between;text-align:left;width:100%;padding:12px 0;background:none;border:0;border-bottom:1px solid #dce2d0;color:var(--green);font-size:12px}.drill-suggestion small{display:block;color:var(--muted);font-size:9px;margin-top:4px}.drill-suggestion .icon{width:15px;height:15px}.drill-suggestion:hover{color:#507b52}.drill-suggestions .field-note{font-size:9px;line-height:1.7;margin-top:10px}

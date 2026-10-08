@@ -79,3 +79,29 @@ class SchedulingTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.store.save_settings({'review_session_size':size,'auto_ai':not before['auto_ai']})
             self.assertEqual(self.store.settings(),before)
+
+    def test_drill_suggestions_clear_with_recall_and_return_with_new_mistakes(self):
+        self.attempts(self.weak,[0,1,0])
+        self.assertTrue(self.store.word(self.weak)['drill_recommended'])
+        self.assertEqual(self.store.word(self.weak)['recent_mistakes'],2)
+        self.attempts(self.weak,[1]*20,mode='drill')
+        self.attempts(self.weak,[1]*20,mode='correction',hinted=True)
+        self.assertTrue(self.store.word(self.weak)['drill_recommended'])
+        for i in range(2):
+            self.attempts(self.weak,[1])
+            self.assertTrue(self.store.word(self.weak)['drill_recommended'])
+        self.attempts(self.weak,[1])
+        self.assertEqual(self.store.word(self.weak)['recall_streak'],3)
+        self.assertFalse(self.store.word(self.weak)['drill_recommended'])
+        self.attempts(self.weak,[0])
+        self.assertTrue(self.store.word(self.weak)['drill_recommended'])
+        self.attempts(self.weak,[1]*8)
+        self.assertFalse(self.store.word(self.weak)['drill_recommended'])
+        self.assertEqual(self.store.word(self.weak)['recent_mistakes'],0)
+
+    def test_quiz_drill_and_assisted_mistakes_do_not_create_spelling_suggestions(self):
+        self.attempts(self.strong,[0]*8,mode='meaning')
+        self.attempts(self.strong,[0]*8,mode='drill')
+        self.attempts(self.strong,[0]*8,mode='review',hinted=True)
+        self.assertFalse(self.store.word(self.strong)['drill_recommended'])
+        self.assertEqual(self.store.word(self.strong)['recent_mistakes'],0)

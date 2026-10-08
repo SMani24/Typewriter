@@ -94,7 +94,7 @@ function navigate(page) {
 }
 function badge(word) {
   const type = word.state.toLowerCase();
-  return `<span class="badge ${type}">${escapeHtml(word.state)}</span>${word.meaning_flagged ? '<span class="badge new">Meaning flagged</span>' : ''}`;
+  return `<span class="badge ${type}">${escapeHtml(word.state)}</span>${word.meaning_flagged ? '<span class="badge new">Meaning flagged</span>' : ''}${word.drill_recommended && state.settings.drill_enabled ? '<span class="badge learning">Worth a drill</span>' : ''}`;
 }
 function dueWords() {
   const meaningOnly = state.settings.meaning_enabled && !['sentence_enabled','definition_enabled','audio_enabled'].some(k=>state.settings[k]);
@@ -120,6 +120,12 @@ function render() {
   renderQueue();
   renderKeys();
   renderPracticeModes();
+  renderDrillSuggestions();
+}
+function renderDrillSuggestions() {
+  const words = state.words.filter(w=>w.drill_recommended).sort((a,b)=>b.recent_mistakes-a.recent_mistakes || b.review_priority-a.review_priority).slice(0,3);
+  $('#drill-suggestions').hidden = !words.length || !state.settings.drill_enabled;
+  $('#drill-suggestions').innerHTML = `<span class="eyebrow">WORTH A DRILL</span>${words.map(w=>`<button class="drill-suggestion" data-drill="${w.id}"><span>${escapeHtml(w.word)}<small>${w.recent_mistakes} misses in ${w.recent_reviews} recent reviews</small></span>${icon('arrow')}</button>`).join('')}<p class="field-note">Suggestions clear after three consecutive correct unaided reviews. Drills and corrections don’t count as recall.</p>`;
 }
 function visibleWords() {
   const query = $('#word-search').value.toLowerCase().trim();
@@ -316,7 +322,7 @@ function showDrillOptions(open) {
 }
 function filterDrillWords() {
   const query = $('#drill-search').value.trim().toLowerCase();
-  drillMatches = state.words.filter(w => w.word.includes(query)).sort((a,b) => Number(b.word.startsWith(query)) - Number(a.word.startsWith(query)) || a.word.localeCompare(b.word));
+  drillMatches = state.words.filter(w => w.word.includes(query)).sort((a,b) => Number(b.word.startsWith(query)) - Number(a.word.startsWith(query)) || Number(!!b.drill_recommended)-Number(!!a.drill_recommended) || a.word.localeCompare(b.word));
   drillHighlight = Math.max(0, drillMatches.findIndex(w => w.word === query));
   $('#drill-word').value = drillMatches.find(w => w.word === query)?.id || '';
   showDrillOptions(true);
@@ -324,7 +330,7 @@ function filterDrillWords() {
 }
 function renderDrillOptions() {
   const input = $('#drill-search'), word = drillMatches[drillHighlight];
-  $('#drill-options').innerHTML = drillMatches.length ? drillMatches.map((w,i) => `<div id="drill-option-${w.id}" role="option" aria-selected="${i === drillHighlight}" data-drill-option="${i}" class="word-option ${i === drillHighlight ? 'active' : ''}">${escapeHtml(w.word)}${w.tag ? `<small>${escapeHtml(w.tag)}</small>` : ''}</div>`).join('') : '<div class="no-word-options">No matching words</div>';
+  $('#drill-options').innerHTML = drillMatches.length ? drillMatches.map((w,i) => `<div id="drill-option-${w.id}" role="option" aria-selected="${i === drillHighlight}" data-drill-option="${i}" class="word-option ${i === drillHighlight ? 'active' : ''}">${escapeHtml(w.word)}${w.drill_recommended ? '<small>Suggested · '+w.recent_mistakes+' misses</small>' : w.tag ? `<small>${escapeHtml(w.tag)}</small>` : ''}</div>`).join('') : '<div class="no-word-options">No matching words</div>';
   if (word && !$('#drill-options').hidden) input.setAttribute('aria-activedescendant', `drill-option-${word.id}`);
   else input.removeAttribute('aria-activedescendant');
   const typed = input.value;
