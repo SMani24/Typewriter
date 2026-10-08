@@ -75,7 +75,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     assert.equal(await page.locator('#answer').getAttribute('aria-invalid'),'true');
     if(process.env.TYPEWRITER_SCREENSHOTS) await page.screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'spelling-feedback-incorrect.png'),animations:'disabled'});
     await page.keyboard.press('Enter');
-    assert(await page.locator('#pronunciation').evaluate(audio=>audio.paused && !audio.hasAttribute('src')));
+    assert(await page.locator('#pronunciation').evaluate(audio=>audio.paused));
     assert.equal(await page.locator('#practice-word').innerText(),'necessary');
     assert.equal(await page.locator('#answer').getAttribute('aria-invalid'),null);
     await page.locator('#answer').fill('necessary');

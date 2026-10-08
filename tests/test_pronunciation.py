@@ -75,3 +75,12 @@ class PronunciationTests(unittest.TestCase):
             self.assertEqual(self.store.word(self.id),before)
         with self.assertRaises(ValueError):self.store.save_settings({'pronunciation_accent':'ca'})
         with self.assertRaises(ValueError):self.dictionary.audio(self.id,accent='ca')
+
+    def test_parallel_preloads_download_only_once(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with patch.object(self.network,'request',return_value=self.response()) as request:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                paths=list(pool.map(lambda _:self.dictionary.audio(self.id),range(4)))
+            self.assertEqual(request.call_count,1)
+        self.assertTrue(all(p==paths[0] for p in paths))
+        self.assertEqual(paths[0].read_bytes(),b'ID3sample')

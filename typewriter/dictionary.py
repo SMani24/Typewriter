@@ -1,5 +1,8 @@
 """Cambridge lookup adapted from AnkiAutomata's sense-based parser."""
 import json
+import tempfile
+from pathlib import Path
+from threading import Lock
 from urllib.parse import quote, urljoin, urlparse
 from bs4 import BeautifulSoup
 from .store import clean_word, contains_word
@@ -10,6 +13,7 @@ USER_AGENT = "Mozilla/5.0 (compatible; Typewriter personal dictionary lookup)"
 class Dictionary:
     def __init__(self, store, network):
         self.store, self.network = store, network
+        self._download_locks = {}
 
     def lookup(self, word):
         word = clean_word(word)
@@ -93,22 +97,32 @@ class Dictionary:
         directory = self.store.path.parent / "audio"
         import hashlib
         path = directory / (hashlib.sha256(name.encode()).hexdigest() + ".mp3")
-        if not path.exists():
-            referer = "https://dictionary.cambridge.org/dictionary/english/" + quote(word["word"].replace(" ", "-"))
-            response = self.network.request("GET", url, stream=True, headers={"User-Agent": USER_AGENT, "Referer": referer})
-            try:
-                if response.status_code != 200:
-                    raise ValueError("Pronunciation is unavailable right now.")
-                chunks, size = [], 0
-                for chunk in response.iter_content(65536):
-                    size += len(chunk)
-                    if size > 5 * 1024 * 1024:
-                        raise ValueError("Pronunciation file is too large.")
-                    chunks.append(chunk)
-                directory.mkdir(exist_ok=True)
-                path.write_bytes(b"".join(chunks))
-            finally:
-                response.close()
+        # Preloading and playback may arrive together; fetch a clip only once.
+        with self._download_locks.setdefault(url, Lock()):
+            if not path.exists():
+                referer = "https://dictionary.cambridge.org/dictionary/english/" + quote(word["word"].replace(" ", "-"))
+                response = self.network.request("GET", url, stream=True, headers={"User-Agent": USER_AGENT, "Referer": referer})
+                try:
+                    if response.status_code != 200:
+                        raise ValueError("Pronunciation is unavailable right now.")
+                    chunks, size = [], 0
+                    for chunk in response.iter_content(65536):
+                        size += len(chunk)
+                        if size > 5 * 1024 * 1024:
+                            raise ValueError("Pronunciation file is too large.")
+                        chunks.append(chunk)
+                    directory.mkdir(exist_ok=True)
+                    temporary = None
+                    try:
+                        with tempfile.NamedTemporaryFile(dir=directory, delete=False) as file:
+                            temporary = Path(file.name)
+                            file.write(b"".join(chunks))
+                        temporary.replace(path)
+                    finally:
+                        if temporary:
+                            temporary.unlink(missing_ok=True)
+                finally:
+                    response.close()
         return path
 
     def upload(self, word_id, file):

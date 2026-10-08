@@ -96,7 +96,9 @@ Existing Cambridge recordings start unchecked. Cambridge lookups only offer audi
 an exact matching headword, avoiding recordings for a base word or redirected typo.
 **Wrong pronunciation?** excludes a recording; an uploaded MP3, WAV, OGG, or M4A
 (up to 5 MB) replaces it and enables listening practice. If the browser blocks automatic
-playback, press **Alt+P** or Listen once to grant a playback gesture.
+playback, press **Alt+P** or Listen once to grant a playback gesture. Checked recordings
+load silently ahead of playback, and replay reuses the loaded clip. Recordings are
+privately cached by their revision so an uploaded replacement uses a fresh URL.
 
 ## Gemini and request limits
 

@@ -85,3 +85,28 @@ class WebTests(unittest.TestCase):
         reply={'text':json.dumps(payload)}
         self.assertEqual(self.client.post('/api/preparation/preview',json=reply,headers=self.headers).status_code,200)
         self.assertEqual(self.client.post('/api/preparation/import',json=reply,headers=self.headers).json['updated'],1)
+
+    def test_only_versioned_successful_audio_can_be_cached_privately(self):
+        store=self.app.extensions['store']
+        word_id=store.add_words([{'word':'necessary'}])['added'][0]
+        directory=store.path.parent/'audio';directory.mkdir()
+        name='a'*32+'.mp3';(directory/name).write_bytes(b'ID3sample')
+        store.set_audio(word_id,file=name,verified=True)
+        original=store.word(word_id)['audio_revision']
+        url=f'/api/words/{word_id}/audio?accent=uk&v={original}'
+        with self.client.get(url) as response:
+            self.assertEqual(response.status_code,200)
+            self.assertIn('private',response.headers['Cache-Control'])
+            self.assertIn('max-age=86400',response.headers['Cache-Control'])
+            etag=response.headers['ETag']
+        with self.client.get(url,headers={'If-None-Match':etag}) as response:
+            self.assertEqual(response.status_code,304)
+        with self.client.get(f'/api/words/{word_id}/audio') as response:
+            self.assertEqual(response.headers['Cache-Control'],'no-store')
+        name='b'*32+'.mp3';(directory/name).write_bytes(b'ID3replacement')
+        store.set_audio(word_id,file=name,verified=True)
+        self.assertNotEqual(store.word(word_id)['audio_revision'],original)
+        store.set_audio(word_id,flagged=True)
+        with self.client.get(url) as response:
+            self.assertEqual(response.status_code,400)
+            self.assertEqual(response.headers['Cache-Control'],'no-store')

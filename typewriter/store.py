@@ -1,4 +1,5 @@
 """SQLite storage, honest practice statistics, and a deliberately simple scheduler."""
+import hashlib
 import json
 import re
 import sqlite3
@@ -203,6 +204,7 @@ class Store:
                 w["sources"] = json.loads(w["sources"])
                 w["distractors"] = json.loads(w["distractors"])
                 w["audio_urls"] = json.loads(w["audio_urls"])
+                w["audio_revision"] = hashlib.sha256(json.dumps([w["audio_file"],w["audio_urls"],w["audio_url"],w["audio_flagged"]],sort_keys=True).encode()).hexdigest()[:16]
                 selected_audio = w["audio_urls"].get(accent) if w["audio_urls"] else w["audio_url"] if accent == "uk" else ""
                 w["audio_eligible"] = bool(w["audio_verified"] and not w["audio_flagged"] and (w["audio_file"] or selected_audio))
                 w["clue"] = blank_sentence(w["word"], w["sentence"]) if contains_word(w["word"], w["sentence"]) else ""

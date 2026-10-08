@@ -404,7 +404,7 @@ function makeMeaningChoices(word) {
   return shuffle([word,...shuffle(others).slice(0,3)]);
 }
 function renderPractice() {
-  stopPronunciation();
+  stopPronunciation(false);
   const word = currentWord(), drill = practice.mode === 'drill', meaning = !drill && word.exercise === 'meaning', audioOnly = !drill && word.exercise === 'audio' && !practice.correction;
   practice.feedback = false; practice.hinted = false; practice.audioBlocked = false; practice.choice = null; practice.wordStarted = Date.now();
   $('#practice-mode').textContent = drill ? 'WORD DRILL · FIND YOUR RHYTHM' : ({sentence:'SENTENCE SPELLING',definition:'SPELLING FROM A MEANING',audio:'AUDIO-ONLY SPELLING',meaning:'MEANING QUIZ'})[word.exercise];
@@ -435,6 +435,7 @@ function renderPractice() {
   }
   $('#answer-submit').hidden = meaning;
   $('#answer-submit').innerHTML = 'Check spelling' + icon('arrow');
+  preparePronunciation(word);
   // Start on the user's session/Next action, retaining browser playback permission.
   if (audioOnly) guarded(() => listen(true));
   setTimeout(() => {if ($('#practice-active').hidden) return;if (meaning) $('.meaning-choice')?.focus();else $('#answer').focus();},20);
@@ -567,23 +568,36 @@ function finishPractice() {
   $('#practice-summary button').focus();
   guarded(refresh);
 }
-function stopPronunciation() {
+function pronunciationUrl(word, preview = false) {
+  return `/api/words/${word.id}/audio?accent=${state.settings.pronunciation_accent || 'uk'}&v=${word.audio_revision || word.version || 0}${preview ? '&preview=1' : ''}`;
+}
+function preparePronunciation(word) {
+  const audio = $('#pronunciation');
+  // Preload only recordings already checked or supplied by the user, without sound.
+  if (!word.audio_flagged && (word.audio_eligible || word.audio_file)) {
+    const url = pronunciationUrl(word);
+    audio.preload = 'auto';
+    if (audio.getAttribute('src') !== url) audio.src = url;
+  } else if (audio.hasAttribute('src') && audio.getAttribute('src') !== pronunciationUrl(word)) {
+    audio.removeAttribute('src');audio.load();
+  }
+}
+function stopPronunciation(release = true) {
   audioSequence++;
   const audio = $('#pronunciation');
   audio.pause();
-  audio.removeAttribute('src');
-  audio.load();
+  if (release) {audio.removeAttribute('src');audio.load();}
 }
 async function listen(automatic = false) {
   if (!practice || $('#practice-active').hidden || currentWord().audio_flagged) return;
-  const id = currentWord().id;
   const sequence = ++audioSequence, audio = $('#pronunciation');
-  const url = `/api/words/${id}/audio?accent=${state.settings.pronunciation_accent || 'uk'}`;
+  const url = pronunciationUrl(currentWord());
   audio.pause();
   // Play directly from our own server. Blob URLs were blocked by media-src 'self'.
   // Starting play before awaiting also keeps it attached to the user's click.
   // Cambridge downloads still pass through the Python server's configured proxy.
-  audio.src = url;
+  if (audio.getAttribute('src') !== url) audio.src = url;
+  else audio.currentTime = 0;
   $('#playback-status').textContent = 'Loading pronunciation…';
   try {await audio.play();if (sequence === audioSequence) $('#playback-status').textContent = 'Listening · Alt+P to replay';}
   catch (error) {
@@ -625,7 +639,9 @@ async function changeWordAudio(data) {
 }
 async function previewAudio() {
   const audio = $('#audio-preview');
-  audio.src = `/api/words/${editingId}/audio?preview=1&accent=${state.settings.pronunciation_accent || 'uk'}`;
+  const url = pronunciationUrl(state.words.find(w=>w.id===editingId),true);
+  if (audio.getAttribute('src') !== url) audio.src = url;
+  else audio.currentTime = 0;
   $('#audio-status').textContent = 'Loading pronunciation…';
   try {await audio.play();await refresh();renderWordAudio();}
   catch (error) {

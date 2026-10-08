@@ -46,7 +46,11 @@ def create_app(data_dir=None, keys_path=None, background=True):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
-        if request.path.startswith("/api") or request.path == "/":
+        cached_audio = request.method in ("GET", "HEAD") and request.path.endswith("/audio") and request.args.get("v") and response.status_code in (200, 206, 304)
+        if cached_audio:
+            response.cache_control.private = True
+            response.cache_control.public = False
+        elif request.path.startswith("/api") or request.path == "/":
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -111,7 +115,7 @@ def create_app(data_dir=None, keys_path=None, background=True):
 
     @app.get("/api/words/<int:word_id>/audio")
     def audio(word_id):
-        return send_file(dictionary.audio(word_id, preview=request.args.get("preview") == "1", accent=request.args.get("accent")), max_age=0)
+        return send_file(dictionary.audio(word_id, preview=request.args.get("preview") == "1", accent=request.args.get("accent")), max_age=86400 if request.args.get("v") else 0)
 
     @app.patch("/api/words/<int:word_id>/audio")
     def audio_settings(word_id):

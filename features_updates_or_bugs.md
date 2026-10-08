@@ -2,7 +2,6 @@
 
 ## Features to Add
 
-3. Playing back the audio feels sluggish at times, see if you can improve performance.
 4. Flag some words with frequent mistakes to be suggested for drill practice! (and they should get removed from there once I know the well so you should pay attention to this part too)
 
 ## Bugs to Fix
