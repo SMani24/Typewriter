@@ -83,5 +83,40 @@ class PreparationTests(unittest.TestCase):
         with zipfile.ZipFile(stream) as archive:
             prompt = archive.read(next(n for n in archive.namelist() if n!='README.md')).decode()
         self.assertEqual([w['word'] for w in self.reply(prompt)['words']], ['necessary'])
+
+    def test_bom_and_markdown_with_inline_closing_fence_are_accepted(self):
+        _,prompts=self.export()
+        text=json.dumps(self.reply(prompts[0]))
+        for reply in ('\ufeff'+text,'Here is the reply:\r\n```JSON\r\n'+text+'```'):
+            self.assertEqual(len(self.preparation.preview(reply)['words']),2)
+
+    def test_validation_identifies_the_word_field_and_json_location(self):
+        _,prompts=self.export()
+        payload=self.reply(prompts[0]);word=payload['words'][0]['word']
+        payload['words'][0]['sentence']='This sentence omits the target.'
+        with self.assertRaisesRegex(ValueError,word+': the sentence'):
+            self.preparation.preview(json.dumps(payload))
+        payload=self.reply(prompts[0]);payload['words'][0]['distractors']=['Only one']
+        with self.assertRaisesRegex(ValueError,word+': Quiz options'):
+            self.preparation.preview(json.dumps(payload))
+        with self.assertRaisesRegex(ValueError,'line 1, column'):
+            self.preparation.preview('{invalid}')
+        self.assertFalse(any(w['definition'] for w in self.store.list_words()))
+
+    def test_full_re_evaluation_batch_uses_one_notebook_snapshot(self):
+        from unittest.mock import patch
+        words=[{'word':f'word{chr(97+i//26)}{chr(97+i%26)}','definition':'Original meaning.','sentence':f'Practise word{chr(97+i//26)}{chr(97+i%26)} today.','tip':'Original tip.'} for i in range(100)]
+        ids=self.store.add_words(words)['added']
+        stream,_=self.preparation.export(ids,size=100,re_evaluate=True)
+        with zipfile.ZipFile(stream) as archive:
+            prompt=archive.read(next(n for n in archive.namelist() if n!='README.md')).decode()
+        reply=json.dumps(self.reply(prompt))
+        with patch.object(self.store,'list_words',wraps=self.store.list_words) as snapshot:
+            preview=self.preparation.preview(reply)
+            snapshot.assert_called_once()
+        self.assertEqual(len(preview['words']),100)
+        self.assertTrue(all(w['replace'] for w in preview['words']))
+        self.assertEqual(self.preparation.apply(reply)['updated'],100)
+        self.assertTrue(all(w['stale'] for w in self.preparation.preview(reply)['words']))
         self.assertNotIn('proxy_host', prompt)
         self.assertNotIn('api_key', prompt)

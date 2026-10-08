@@ -153,7 +153,15 @@ hand** for manual entry instead. Both options work without API keys.
    enable **Re-evaluate existing material** in the export dialog.
 3. Give one Markdown prompt at a time to your chosen LLM. Each includes instructions,
    vocabulary, a unique batch ID, and the exact JSON output contract.
-4. Paste the reply or open its `.json`, `.md`, or `.txt` file. Preview it, then apply it.
+4. Paste the reply or open its `.json`, `.md`, or `.txt` file. It is checked automatically.
+   When it is ready, review the changes and click **Apply to notebook**.
+   **Preview reply** checks immediately or retries a failed check.
+
+Validation progress and errors appear beside the reply. Older checks cannot enable
+Apply for text you have changed. If a reply has already been imported or its words
+were edited after export, those entries stay protected; **Export fresh prompts for
+changed words** creates a new re-evaluation batch. A stalled check offers a retry
+after ten seconds and keeps your pasted text.
 
 The app also accepts a Markdown reply containing one fenced JSON block. Import validates
 all entries before changing anything, rejects unexpected/duplicate words and unsuitable

@@ -28,11 +28,12 @@ const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">$
 function hydrateIcons(root = document) { $$('[data-icon]', root).forEach(el => el.innerHTML = icon(el.dataset.icon)); }
 let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer, audioSequence = 0, answerBusy = false, drillMatches = [], drillHighlight = 0, preparedPreviewText = null;
 let pendingFailure = null;
+let preparationPreviewVersion = 0, preparationPreviewTimer, preparationPreviewController = null, preparationApplying = false, stalePreparationIds = [];
 const preparationPending = word => word.status !== 'ready' || !!word.meaning_flagged;
 const token = $('meta[name="typewriter-token"]').content;
 
-async function api(path, method = 'GET', data) {
-  const response = await fetch('/api' + path, {method, headers:{'Content-Type':'application/json','X-Typewriter-Token':token}, ...(data !== undefined ? {body:JSON.stringify(data)} : {})});
+async function api(path, method = 'GET', data, signal) {
+  const response = await fetch('/api' + path, {method, signal, headers:{'Content-Type':'application/json','X-Typewriter-Token':token}, ...(data !== undefined ? {body:JSON.stringify(data)} : {})});
   const result = await response.json();
   if (!response.ok) throw new Error(result.error || 'Please try again.');
   return result;
@@ -730,6 +731,7 @@ function openPreparation(ids, reEvaluate = false) {
   $('#preparation-dialog').dataset.ids = ids ? JSON.stringify(ids) : '';
   updatePromptCount();
   $('#preparation-dialog').showModal();
+  if ($('#prepared-response').value.trim() && !preparationApplying) schedulePreparedPreview();
 }
 function preparationIds() {
   if ($('#prompt-scope').value !== 'selected') return undefined;
@@ -752,23 +754,77 @@ async function downloadPrompts() {
   await refresh();toast('Prompts downloaded. Give one Markdown file at a time to your LLM.');
 }
 function invalidatePreparedPreview() {
+  preparationPreviewVersion++;
+  clearTimeout(preparationPreviewTimer);
+  if (preparationPreviewController) preparationPreviewController.abort();
+  preparationPreviewController = null;stalePreparationIds = [];
   preparedPreviewText = null;$('#apply-preparation').disabled=true;$('#preparation-preview').innerHTML='';
+  setPreparationStatus('');
+}
+function setPreparationStatus(message, kind = '') {
+  const status = $('#preparation-status');
+  status.textContent = message;status.dataset.state = kind;
+  status.setAttribute('role',kind === 'error' ? 'alert' : 'status');
+}
+function schedulePreparedPreview() {
+  invalidatePreparedPreview();
+  if (!$('#prepared-response').value.trim() || preparationApplying) return;
+  setPreparationStatus('Checking your reply…','checking');
+  preparationPreviewTimer = setTimeout(()=>previewPreparation(),250);
 }
 async function previewPreparation() {
+  if (preparationApplying) return;
   invalidatePreparedPreview();
-  const text = $('#prepared-response').value, result = await api('/preparation/preview','POST',{text});
-  // Do not apply a reply changed while validation was in flight.
-  if ($('#prepared-response').value !== text) return;
-  preparedPreviewText = text;
-  $('#apply-preparation').disabled = !result.words.some(w=>w.fill.length || w.replace.length);
-  $('#preparation-preview').innerHTML = `<p class="info-note">${result.words.length} entries · ${result.missing} missing from the batch. Review additions and replacements below. Newer edits will be kept.</p>` + result.words.map(w=>`<div class="prepared-entry"><strong>${escapeHtml(w.word)}</strong><span class="field-note">${w.removed ? 'Word removed from notebook; will be skipped.' : w.stale ? 'Changed since export or already applied; will be kept. Export a new prompt to re-evaluate.' : w.replace.length ? 'Will replace: '+escapeHtml(w.replace.join(', ')) : w.fill.length ? 'Will add: '+escapeHtml(w.fill.join(', ')) : 'Already filled; will be kept.'}</span>${w.replace.length ? `<p class="muted small">Saved meaning: ${escapeHtml(w.previous.definition || 'Empty')}</p>${w.previous.sentence !== undefined ? `<p class="muted small">Saved sentence: ${escapeHtml(w.previous.sentence || 'Empty')}</p><p class="muted small">Saved tip: ${escapeHtml(w.previous.tip || 'Empty')}</p>` : ''}` : ''}<p>${escapeHtml(w.definition)}</p><p>${escapeHtml(w.sentence)}</p><p class="muted small">${escapeHtml(w.tip)}</p>${w.distractors ? `<p class="field-note">Quiz options: ${w.distractors.map(escapeHtml).join(' · ')}</p>` : ''}</div>`).join('');
+  const text = $('#prepared-response').value, version = preparationPreviewVersion;
+  if (!text.trim()) {setPreparationStatus('Paste a reply or open a reply file to preview it.');return;}
+  if (new Blob([text]).size > 2*1024*1024) {setPreparationStatus('Choose a reply smaller than 2 MB.','error');return;}
+  const controller = new AbortController();preparationPreviewController = controller;
+  let timedOut = false;
+  const timeout = setTimeout(()=>{timedOut=true;controller.abort();},10000);
+  setPreparationStatus('Checking your reply…','checking');
+  try {
+    const result = await api('/preparation/preview','POST',{text},controller.signal);
+    // Only the newest validation can enable Apply, even if text is edited and restored.
+    if (version !== preparationPreviewVersion || $('#prepared-response').value !== text) return;
+    const ready = result.words.filter(w=>w.fill.length || w.replace.length);
+    stalePreparationIds = result.words.filter(w=>w.stale && !w.removed).map(w=>w.id);
+    preparedPreviewText = ready.length ? text : null;
+    $('#apply-preparation').disabled = !ready.length;
+    setPreparationStatus(ready.length ? `${ready.length} word${ready.length===1 ? '' : 's'} ready to apply. Review the changes below.` : stalePreparationIds.length ? 'No changes to apply: these words were edited after export or already imported. Export fresh prompts to re-evaluate them.' : 'No changes to apply. These entries are already filled or their words have been removed.',ready.length ? 'ready' : 'kept');
+    $('#preparation-preview').innerHTML = `<p class="info-note">${result.words.length} entries · ${result.missing} missing from the batch. Review additions and replacements below. Newer edits will be kept.</p>` + result.words.map(w=>`<div class="prepared-entry"><strong>${escapeHtml(w.word)}</strong><span class="field-note">${w.removed ? 'Word removed from notebook; will be skipped.' : w.stale ? 'Changed since export or already applied; will be kept. Export a new prompt to re-evaluate.' : w.replace.length ? 'Will replace: '+escapeHtml(w.replace.join(', ')) : w.fill.length ? 'Will add: '+escapeHtml(w.fill.join(', ')) : 'Already filled; will be kept.'}</span>${w.replace.length ? `<p class="muted small">Saved meaning: ${escapeHtml(w.previous.definition || 'Empty')}</p>${w.previous.sentence !== undefined ? `<p class="muted small">Saved sentence: ${escapeHtml(w.previous.sentence || 'Empty')}</p><p class="muted small">Saved tip: ${escapeHtml(w.previous.tip || 'Empty')}</p>` : ''}` : ''}<p>${escapeHtml(w.definition)}</p><p>${escapeHtml(w.sentence)}</p><p class="muted small">${escapeHtml(w.tip)}</p>${w.distractors ? `<p class="field-note">Quiz options: ${w.distractors.map(escapeHtml).join(' · ')}</p>` : ''}</div>`).join('');
+    if (stalePreparationIds.length) $('#preparation-preview').insertAdjacentHTML('afterbegin','<button type="button" class="text-button" data-action="fresh-preparation">Export fresh prompts for changed words'+icon('download')+'</button>');
+  } catch (error) {
+    if (version !== preparationPreviewVersion) return;
+    setPreparationStatus(timedOut ? 'Validation timed out. Your reply is still here. Press Preview reply to try again.' : error.message || 'Could not validate this reply. Press Preview reply to try again.','error');
+  } finally {
+    clearTimeout(timeout);
+    if (preparationPreviewController === controller) preparationPreviewController = null;
+  }
+}
+async function exportFreshPreparation() {
+  if (!stalePreparationIds.length) return;
+  $('#prompt-reevaluate').checked = true;
+  $('#prompt-scope option[value="selected"]').disabled = false;
+  $('#prompt-scope').value = 'selected';
+  $('#preparation-dialog').dataset.ids = JSON.stringify(stalePreparationIds);
+  updatePromptCount();await downloadPrompts();
 }
 async function applyPreparation() {
+  if (preparationApplying) return;
   if (!preparedPreviewText || preparedPreviewText !== $('#prepared-response').value) throw new Error('Preview this reply before importing it.');
-  const result = await api('/preparation/import','POST',{text:preparedPreviewText});
-  invalidatePreparedPreview();await refresh();updatePromptCount();
-  toast(`${result.updated} words updated · ${result.skipped} kept or removed · ${result.missing} missing from this reply.`);
-  $('#preparation-preview').textContent = 'Reply imported. You can preview the next batch here.';
+  preparationApplying = true;$('#prepared-response').readOnly=true;$('#prepared-file').disabled=true;
+  setPreparationStatus('Applying your reviewed changes…','checking');
+  try {
+    const result = await api('/preparation/import','POST',{text:preparedPreviewText});
+    invalidatePreparedPreview();await refresh();updatePromptCount();
+    toast(`${result.updated} words updated · ${result.skipped} kept or removed · ${result.missing} missing from this reply.`);
+    setPreparationStatus(`${result.updated} words updated. Your reply is kept here for reference.`,'ready');
+    $('#preparation-preview').textContent = 'Reply imported. You can preview the next batch here.';
+  } catch (error) {
+    setPreparationStatus(error.message || 'Could not apply this reply. Your text is still here.','error');throw error;
+  } finally {
+    preparationApplying = false;$('#prepared-response').readOnly=false;$('#prepared-file').disabled=false;
+  }
 }
 async function refreshModels() {
   $('#model-note').textContent = 'Checking available model IDs…';
@@ -782,11 +838,11 @@ $('#audio-upload').addEventListener('change',()=>guarded(uploadAudio));
 $('#audio-verified').addEventListener('change',event=>guarded(()=>changeWordAudio({verified:event.target.checked})));
 $('#prompt-size').addEventListener('input',updatePromptCount);
 $('#prompt-scope').addEventListener('change',updatePromptCount);
-$('#prepared-response').addEventListener('input',invalidatePreparedPreview);
+$('#prepared-response').addEventListener('input',schedulePreparedPreview);
 $('#prepared-file').addEventListener('change',event=>guarded(async()=>{
   const file=event.target.files[0];if (!file) return;
   if (file.size>2*1024*1024) throw new Error('Choose a reply smaller than 2 MB.');
-  $('#prepared-response').value=await file.text();invalidatePreparedPreview();event.target.value='';
+  $('#prepared-response').value=await file.text();schedulePreparedPreview();event.target.value='';
 }));
 
 const actions = {
@@ -807,6 +863,7 @@ const actions = {
   listen:() => listen(),
   'offline-preparation':() => openPreparation(),
   'download-prompts':downloadPrompts, 'preview-preparation':previewPreparation, 'apply-preparation':applyPreparation,
+  'fresh-preparation':exportFreshPreparation,
   'refresh-models':refreshModels, 'preview-audio':previewAudio,
   'flag-edit-audio':() => changeWordAudio({flagged:true,verified:false}),
   'restore-audio':() => changeWordAudio({flagged:false,verified:false}),
@@ -875,6 +932,7 @@ $('#settings-form').addEventListener('submit',event => {event.preventDefault();g
 $('#confirm-delete').addEventListener('click',() => guarded(async () => {await api('/words/'+deletingId,'DELETE');$('#confirm-dialog').close();$('#word-dialog').close();await refresh();toast('Word removed.');},$('#confirm-delete')));
 $('#import-file').addEventListener('change',event => guarded(async () => {const file = event.target.files[0];if (!file) return;if (file.size > 32*1024*1024) throw new Error('Choose a backup smaller than 32 MB.');let backup;try {backup=JSON.parse(await file.text());} catch {throw new Error('That file is not a valid JSON backup.');}const r=await api('/import','POST',backup);await refresh();toast(`${r.added} words imported. ${r.skipped} existing words kept.`);event.target.value='';}));
 $('#word-dialog').addEventListener('close',() => {$('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();});
+$('#preparation-dialog').addEventListener('close',()=>{if (!preparationApplying) invalidatePreparedPreview();});
 $('#practice-dialog').addEventListener('cancel',event => {event.preventDefault();if ($('#practice-summary').hidden) finishPractice();else actions['close-practice']();});
 window.addEventListener('hashchange',() => navigate(location.hash.slice(1)));
 $$('dialog').forEach(dialog => dialog.addEventListener('close',() => {

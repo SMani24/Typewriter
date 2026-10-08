@@ -69,16 +69,19 @@ class Preparation:
     def validate(self, text):
         if not isinstance(text, str) or len(text.encode()) > 2 * 1024 * 1024:
             raise ValueError("Paste a response or choose a JSON/Markdown file smaller than 2 MB.")
+        text = text.strip().lstrip("\ufeff").strip()
         try:
             payload = json.loads(text)
-        except ValueError:
-            blocks = re.findall(r"```(?:json)?\s*\n([\s\S]*?)\n```", text, flags=re.I)
+        except json.JSONDecodeError as error:
+            if text.startswith(("{", "[")):
+                raise ValueError(f"Invalid JSON at line {error.lineno}, column {error.colno}: {error.msg}. Nothing has been imported.") from None
+            blocks = re.findall(r"```(?:json)?[ \t]*\r?\n([\s\S]*?)```", text, flags=re.I)
             if len(blocks) != 1:
                 raise ValueError("Use the JSON response or a Markdown file with one fenced JSON block.") from None
             try:
                 payload = json.loads(blocks[0])
-            except ValueError:
-                raise ValueError("The response is not valid JSON. Ask the LLM to follow the output contract.") from None
+            except json.JSONDecodeError as error:
+                raise ValueError(f"Invalid JSON in the code block at line {error.lineno}, column {error.colno}: {error.msg}. Nothing has been imported.") from None
         if not isinstance(payload, dict) or payload.get("format") != FORMAT:
             raise ValueError("This is not a Typewriter preparation response. Use a generated prompt and its output contract.")
         batch_id = payload.get("batch_id")
@@ -99,18 +102,21 @@ class Preparation:
                 raise ValueError("Each entry needs word, definition, sentence, and tip fields.")
             word = clean_word(item.get("word"))
             if word not in expected or word in seen:
-                raise ValueError("The response contains an unexpected or duplicate word. Nothing has been imported.")
+                raise ValueError(f"Unexpected or duplicate word: {word}. Use the exact words from this prompt batch. Nothing has been imported.")
             seen.add(word)
             values = {}
             for field in ("definition", "sentence", "tip"):
                 value = item.get(field)
                 if not isinstance(value, str) or not value.strip() or len(value) > 2000:
-                    raise ValueError("Every entry needs nonempty definition, sentence, and tip text (up to 2,000 characters).")
+                    raise ValueError(f"{word}: {field} must be nonempty text, up to 2,000 characters. Nothing has been imported.")
                 values[field] = value.strip()
             if not contains_word(word, values["sentence"]):
-                raise ValueError("Every example sentence must contain its exact word. Nothing has been imported.")
+                raise ValueError(f"{word}: the sentence must contain this exact word. Nothing has been imported.")
             if "distractors" in item or record.get("quiz_options"):
-                values["distractors"] = validate_distractors(item.get("distractors"), values["definition"])
+                try:
+                    values["distractors"] = validate_distractors(item.get("distractors"), values["definition"])
+                except ValueError as error:
+                    raise ValueError(f"{word}: {error} Nothing has been imported.") from None
             validated.append({"id": expected[word], "word": word, **values, "replacement": record.get("replacements", {}).get(word)})
         return batch_id, validated, len(expected) - len(seen)
 
