@@ -139,7 +139,7 @@ function badge(word) {
 }
 function dueWords() {
   const meaningOnly = state.settings.meaning_enabled && !['sentence_enabled','definition_enabled','audio_enabled'].some(k=>state.settings[k]);
-  return state.words.filter(w => (meaningOnly || w.is_due) && exerciseTypes(w).length).sort((a,b) => (b[meaningOnly ? 'meaning_priority' : 'review_priority'] ?? 0) - (a[meaningOnly ? 'meaning_priority' : 'review_priority'] ?? 0) || a.due.localeCompare(b.due));
+  return state.words.filter(w => (meaningOnly || w.is_due) && exerciseTypes(w).some(type=>meaningOnly ? type === 'meaning' : type !== 'meaning')).sort((a,b) => (b[meaningOnly ? 'meaning_priority' : 'review_priority'] ?? 0) - (a[meaningOnly ? 'meaning_priority' : 'review_priority'] ?? 0) || a.due.localeCompare(b.due));
 }
 function stat(label, value, note, symbol) {
   return `<div class="stat"><span class="stat-label">${label}</span><span class="icon-tile">${icon(symbol)}</span><div class="stat-value">${value}</div><span class="stat-note">${note}</span></div>`;
@@ -436,10 +436,17 @@ function reviewPool(ids, endless, settings) {
   });
   return {words,quizzes:quizzes.slice(0,limit)};
 }
-function startReview(ids, endless = false) {
+function startReview(ids, endless = false, meaningOnly = false) {
   if (!state.settings.review_enabled) return;
   const pool = reviewPool(ids,endless,state.settings);
-  const session = TypewriterReview.create(pool.words,pool.quizzes,state.settings,Math.random,{endless});
+  if (!ids && !endless && !meaningOnly && state.words.length && !pool.words.length && ['sentence_enabled','definition_enabled','audio_enabled'].some(k=>state.settings[k])) {
+    const extra = reviewPool(undefined,true,state.settings);
+    $('#review-complete-note').textContent = extra.words.length ? 'No spelling reviews are due right now. Keep practising in endless mode, or take a meaning quiz session.' : 'No words are ready for an enabled spelling exercise. Add a sentence, meaning, or checked recording, or take a meaning quiz session.';
+    $('#review-complete-endless').disabled = !extra.words.length;
+    $('#review-complete-quizzes').disabled = !pool.quizzes.length;
+    $('#review-complete-dialog').showModal();return;
+  }
+  const session = TypewriterReview.create(meaningOnly ? [] : pool.words,pool.quizzes,state.settings,Math.random,{endless});
   if (!session.queue.length) {
     if (!state.words.length) {openWord();toast('Add some words, or try the starter collection.');}
     else {toast('No words are available for the enabled exercises. Add clues, check recordings, or choose other exercises in Settings.');navigate('words');}
@@ -935,6 +942,8 @@ const actions = {
   'save-keys':async () => {const result = await api('/keys','PUT',{keys:$('#api-keys').value});$('#api-keys').value = '';await refresh();toast(`${result.count} keys saved locally.`);},
   import:() => $('#import-file').click(),
   'delete-word':() => {deletingId = editingId;$('#confirm-message').textContent = `This removes “${state.words.find(w => w.id === editingId).word}” and its practice history from this notebook.`;$('#confirm-dialog').showModal();},
+  'review-complete-endless':()=>{$('#review-complete-dialog').close();startReview(undefined,true);},
+  'review-complete-quizzes':()=>{$('#review-complete-dialog').close();startReview(undefined,false,true);},
   'edit-practice-word':()=>{if (!answerBusy && practice && !$('#practice-active').hidden) {stopPronunciation();openWord(currentWord().id);}},
   hint:() => {if (!practice) return;practice.hinted = true;$('#practice-word').textContent = currentWord().word;$('#hint-button').hidden = true;$('#practice-label').textContent = 'LOOK, REMEMBER, THEN TYPE';$('#answer').focus();},
   listen:() => listen(),

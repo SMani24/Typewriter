@@ -76,3 +76,11 @@ dialog>.toast{position:sticky;bottom:0;left:auto;transform:none;width:auto;max-w
 
 .volume-setting {margin:22px 0;padding:18px;border:1px solid var(--line);border-radius:14px}
 .volume-setting input[type=range] {width:100%;accent-color:var(--green)}
+
+.review-ranking-help {margin:20px 0;border:1px solid var(--line);border-radius:14px;background:var(--green-light)}
+.review-ranking-help summary {display:flex;align-items:center;gap:10px;padding:16px;cursor:pointer;font-weight:600}
+.review-ranking-help summary::after {content:'+';margin-left:auto;font-size:20px;font-weight:400}
+.review-ranking-help[open] summary::after {content:'−'}
+.review-ranking-help summary:focus-visible {outline:2px solid var(--green);outline-offset:3px;border-radius:14px}
+.review-ranking-help>div {padding:0 16px 16px;font-size:13px}
+.review-ranking-help p+p {margin-top:12px}
