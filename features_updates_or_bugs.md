@@ -2,8 +2,6 @@
 
 ## Features to Add
 
-Add a small button to enable edditing the word on the menus where the user is practicing, some words may have spelling errors in them or the user might want to change something like removing an s from the end of them :)
-
 If the apps volume can be adjusted from the settings it'd be great.
 
 Add a panel (this could be a simple notice in the settings that shows up when the user hovers their mouse above it) that informs the user how the word is chosen for them to review and how the words are prioratized.

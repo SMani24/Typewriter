@@ -35,3 +35,26 @@ class LatestTests(unittest.TestCase):
         dictionary.lookup = lambda *args, **kwargs: self.fail("Uploaded recordings need no lookup")
         self.assertTrue(dictionary.pronunciation(self.id, choose_alternative=True)["uploaded"])
         self.assertTrue(self.store.word(self.id)["audio_eligible"])
+
+    def test_rename_resets_learning_without_erasing_history(self):
+        self.store.attempt(self.id, {"answer": "color", "mode": "review"})
+        self.store.set_audio(self.id, file="a" * 32 + ".wav", verified=True)
+        before = self.store.export()["attempts"]
+        word = self.store.edit_word(self.id, {"word": "colour", "sentence": "The colour is blue."})
+        self.assertEqual((word["word"], word["stage"], word["reviews"], word["recent_reviews"]), ("colour", 0, 0, 0))
+        self.assertTrue(word["is_due"])
+        self.assertFalse(word["audio_eligible"])
+        self.assertEqual(self.store.export()["attempts"], before)
+        self.assertEqual(self.store.progress()["reviews"], 1)
+        self.assertEqual(self.store.attempt(self.id, {"answer": "colour", "mode": "review"})["word"]["stage"], 1)
+        restored = Store(Path(self.directory.name) / "renamed.db")
+        restored.import_backup(self.store.export())
+        self.assertEqual(restored.list_words()[0]["reviews"], 1)
+        self.assertEqual(restored.progress()["reviews"], 2)
+
+    def test_rename_to_existing_word_is_atomic(self):
+        self.store.add_words([{"word": "colour"}])
+        before = self.store.export()
+        with self.assertRaisesRegex(ValueError, "already in your notebook"):
+            self.store.edit_word(self.id, {"word": "colour", "definition": "Changed"})
+        self.assertEqual(self.store.export()["words"], before["words"])

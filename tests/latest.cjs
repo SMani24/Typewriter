@@ -104,6 +104,17 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.getByRole('button',{name:'Edit color',exact:true}).click();
     assert.equal(await page.locator('#word-pronunciation-accent').inputValue(),'us');
     await page.locator('[data-close="word-dialog"]').click();
+    await review('necessary');
+    await page.locator('[data-action="edit-practice-word"]').click();
+    await page.locator('#word-form input[name="word"]').fill('essential');
+    assert.equal(await page.locator('#word-form textarea[name="sentence"]').inputValue(),'This change is essential.');
+    await page.locator('#word-submit').click();
+    await page.waitForSelector('#word-dialog',{state:'hidden'});
+    await page.locator('#answer').fill('essential');await page.keyboard.press('Enter');
+    await page.waitForSelector('#answer-form[data-result="correct"]');
+    const renamed=(await api('/state')).words.find(w=>w.word==='essential');
+    assert.equal(renamed.reviews,1);assert(renamed.audio_flagged);
+    await end();
     assert.deepEqual(errors,[]);
     console.log('Latest checks passed: unsaved settings save/discard/keep, retained draft, and restored values.');
   } finally {

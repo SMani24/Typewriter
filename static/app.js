@@ -290,7 +290,9 @@ function openWord(id = null) {
   if (id) {renderWordAudio();renderWordMeaning();}
   $('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();
   const form = $('#word-form');
-  form.elements.word.readOnly = id !== null;
+  form.elements.word.readOnly = false;
+  form.elements.word.dataset.previous = id ? state.words.find(w=>w.id===id).word : '';
+  $('#spelling-edit-note').hidden = !id;
   if (id) {const word = state.words.find(w => w.id === id);['word','definition','sentence','tip','tag'].forEach(k => form.elements[k].value = word[k]);$('#word-provenance').textContent = ['definition','sentence','tip'].filter(k => word[k]).map(k => ({definition:'Meaning',sentence:'Sentence',tip:'Tip'})[k] + ': ' + (word.sources[k] || 'manual')).join(' · ');}
   else $('#word-provenance').textContent = 'Automatic suggestions are labelled with their source. You can edit every field.';
   $('#word-dialog').showModal();
@@ -320,8 +322,9 @@ async function saveWord(event) {
   await guarded(async () => {
     const form = $('#word-form');
     let result;
+    const savedId = editingId;
     if (editingId) {
-      const data = Object.fromEntries(['definition','sentence','tip','tag'].map(k => [k,form.elements[k].value]));
+      const data = Object.fromEntries(['word','definition','sentence','tip','tag'].map(k => [k,form.elements[k].value]));
       if (dictionaryApplied) {data.source = 'Cambridge';data.audio_url = dictionaryData.audio[state.settings.pronunciation_accent || 'uk'] || '';data.audio_urls = dictionaryData.audio;}
       result = await api('/words/' + editingId,'PATCH',data);
       toast('Word updated.');
@@ -335,7 +338,16 @@ async function saveWord(event) {
     }
     $('#word-dialog').close();
     await refresh();
-    if (!editingId && result.added.length) guarded(()=>checkAddedPronunciations(result.added));
+    if (savedId && practice && !$('#practice-active').hidden && currentWord().id === savedId) {
+      const updated = state.words.find(w=>w.id===savedId);
+      const types = exerciseTypes(updated,practice.quizSettings || state.settings);
+      let exercise = currentWord().exercise;
+      if (practice.mode !== 'drill' && !types.includes(exercise)) exercise = types.find(t=>t!=='meaning') || types[0];
+      Object.assign(currentWord(),updated,{exercise,spellingRecorded:false});
+      practice.correction = false;
+      if (practice.mode === 'drill' || exercise) renderPractice();else await advancePractice();
+    }
+    if (!savedId && result.added.length) guarded(()=>checkAddedPronunciations(result.added));
   },$('#word-submit'));
 }
 
@@ -547,7 +559,7 @@ async function answerSubmit(event) {
     const mode = practice.mode === 'drill' ? 'drill' : practice.correction ? 'correction' : meaning ? 'meaning' : 'review';
     let result;
     try {
-      result = await api(`/words/${word.id}/attempts`,'POST',{answer,mode,...(meaning ? {version:word.version} : {}),hinted:practice.hinted || practice.correction,elapsed_ms:Math.min(86400000,Date.now()-practice.wordStarted)});
+      result = await api(`/words/${word.id}/attempts`,'POST',{answer,mode,version:word.version,hinted:practice.hinted || practice.correction,elapsed_ms:Math.min(86400000,Date.now()-practice.wordStarted)});
     } catch (error) {
       if (practice === session && $('#practice-dialog').open && !$('#practice-active').hidden) practiceFeedback('error','Couldn’t check this answer',`<p>${escapeHtml(error.message || 'Please try again.')}</p>`);
       throw error;
@@ -917,6 +929,7 @@ const actions = {
   'save-keys':async () => {const result = await api('/keys','PUT',{keys:$('#api-keys').value});$('#api-keys').value = '';await refresh();toast(`${result.count} keys saved locally.`);},
   import:() => $('#import-file').click(),
   'delete-word':() => {deletingId = editingId;$('#confirm-message').textContent = `This removes “${state.words.find(w => w.id === editingId).word}” and its practice history from this notebook.`;$('#confirm-dialog').showModal();},
+  'edit-practice-word':()=>{if (!answerBusy && practice && !$('#practice-active').hidden) {stopPronunciation();openWord(currentWord().id);}},
   hint:() => {if (!practice) return;practice.hinted = true;$('#practice-word').textContent = currentWord().word;$('#hint-button').hidden = true;$('#practice-label').textContent = 'LOOK, REMEMBER, THEN TYPE';$('#answer').focus();},
   listen:() => listen(),
   'offline-preparation':() => openPreparation(),
@@ -946,6 +959,16 @@ document.addEventListener('change',event => {
 $('#select-all').addEventListener('change',event => {visibleWords().forEach(w => event.target.checked ? selected.add(w.id) : selected.delete(w.id));renderLibrary();});
 $('#word-search').addEventListener('input',renderLibrary);
 $('#word-form').addEventListener('submit',saveWord);
+$('#word-form').elements.word.addEventListener('input',event=>{
+  if (!editingId) return;
+  const old = event.target.dataset.previous, word = event.target.value.trim().toLowerCase();
+  if (!word || !old) return;
+  const escaped = old.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const sentence = $('#word-form').elements.sentence;
+  sentence.value = sentence.value.replace(new RegExp('(?<!\\w)'+escaped+'(?!\\w)','gi'),word);
+  event.target.dataset.previous = word;
+  dictionaryApplied = false;
+});
 $('#drill-form').addEventListener('submit',startDrill);
 $('#drill-search').addEventListener('input',filterDrillWords);
 $('#drill-search').addEventListener('focus',filterDrillWords);

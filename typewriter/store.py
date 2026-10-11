@@ -98,7 +98,7 @@ class Store:
                 );
             """)
             columns = {r["name"] for r in db.execute("PRAGMA table_info(words)")}
-            for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''", "meaning_flagged": "INTEGER NOT NULL DEFAULT 0", "distractors": "TEXT NOT NULL DEFAULT '[]'", "audio_urls": "TEXT NOT NULL DEFAULT '{}'", "pronunciation_accent": "TEXT NOT NULL DEFAULT ''"}.items():
+            for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''", "meaning_flagged": "INTEGER NOT NULL DEFAULT 0", "distractors": "TEXT NOT NULL DEFAULT '[]'", "audio_urls": "TEXT NOT NULL DEFAULT '{}'", "pronunciation_accent": "TEXT NOT NULL DEFAULT ''", "recall_reset_at": "TEXT NOT NULL DEFAULT ''"}.items():
                 if name not in columns:
                     db.execute(f"ALTER TABLE words ADD COLUMN {name} {definition}")
 
@@ -186,11 +186,11 @@ class Store:
                 COUNT(CASE WHEN a.mode='review' AND a.hinted=0 AND a.correct=1 THEN 1 END) AS correct_reviews,
                 COUNT(CASE WHEN a.mode='drill' THEN 1 END) AS drills,
                 MAX(a.created) AS last_practised
-                FROM words w LEFT JOIN attempts a ON a.word_id=w.id GROUP BY w.id ORDER BY w.created DESC,w.id DESC""").fetchall()
+                FROM words w LEFT JOIN attempts a ON a.word_id=w.id AND a.created>w.recall_reset_at GROUP BY w.id ORDER BY w.created DESC,w.id DESC""").fetchall()
             recent = db.execute("""WITH ranked AS (
-                SELECT id,word_id,mode,hinted,correct,created,
-                ROW_NUMBER() OVER (PARTITION BY word_id,mode,hinted ORDER BY id DESC) AS position
-                FROM attempts WHERE mode IN ('review','meaning')
+                SELECT a.id,word_id,mode,hinted,correct,a.created,
+                ROW_NUMBER() OVER (PARTITION BY word_id,mode,hinted ORDER BY a.id DESC) AS position
+                FROM attempts a JOIN words w ON w.id=a.word_id WHERE mode IN ('review','meaning') AND a.created>w.recall_reset_at
             ) SELECT word_id,mode,hinted,COUNT(*) AS total,SUM(correct) AS correct,
                 MIN(CASE WHEN correct=0 THEN position END) AS first_miss,
                 MAX(CASE WHEN position=1 THEN id END) AS last_id,
@@ -276,7 +276,8 @@ class Store:
         original = self.word(word_id)
         if not original:
             raise KeyError("Word not found.")
-        item = self.validate_word({**original, **{k: v for k, v in data.items() if k in ["definition", "sentence", "tip", "tag"]}})
+        item = self.validate_word({**original, **{k: v for k, v in data.items() if k in ["word", "definition", "sentence", "tip", "tag"]}})
+        renamed = item["word"] != original["word"]
         sources = original["sources"]
         if item["definition"] != original["definition"]:
             sources.pop("distractors", None)
@@ -289,10 +290,17 @@ class Store:
             raise ValueError("Unsupported pronunciation URL.")
         status = "ready" if all(item[k] for k in ["definition", "sentence", "tip"]) else "pending"
         with self.db() as db:
+            if renamed and db.execute("SELECT id FROM words WHERE word=? AND id!=?", (item["word"],word_id)).fetchone():
+                raise ValueError("That spelling is already in your notebook. Choose a different word.")
+            db.execute("UPDATE words SET word=? WHERE id=?", (item["word"],word_id))
             db.execute("UPDATE words SET definition=?,sentence=?,tip=?,tag=?,sources=?,audio_url=?,updated=?,status=?,enrichment_error='',version=version+1 WHERE id=?", (item["definition"], item["sentence"], item["tip"], item["tag"], json.dumps(sources), audio, now(), status, word_id))
             db.execute("UPDATE words SET audio_urls=? WHERE id=?", (json.dumps(audio_urls), word_id))
             if item["definition"] != original["definition"]:
                 db.execute("UPDATE words SET meaning_flagged=0,distractors='[]' WHERE id=?", (word_id,))
+            if renamed:
+                stamp = now()
+                # Retain the answer history, but start learning the corrected target afresh.
+                db.execute("UPDATE words SET stage=0,due=?,recall_reset_at=?,audio_url='',audio_urls='{}',audio_verified=0,audio_flagged=1,pronunciation_accent='',distractors='[]' WHERE id=?", (stamp,stamp,word_id))
         if (audio != original["audio_url"] or audio_urls != original["audio_urls"]) and not original["audio_file"]:
             with self.db() as db:
                 db.execute("UPDATE words SET audio_verified=0 WHERE id=?", (word_id,))
@@ -408,9 +416,9 @@ class Store:
             row = db.execute("SELECT * FROM words WHERE id=?", (word_id,)).fetchone()
             if not row:
                 raise KeyError("Word not found.")
+            if "version" in data and data["version"] != row["version"]:
+                raise ValueError("This word changed during practice. Edit it or start a new session.")
             if mode == "meaning":
-                if "version" in data and data["version"] != row["version"]:
-                    raise ValueError("This word changed during practice. Start a new session.")
                 if re.fullmatch(r"distractor:[0-2]", answer):
                     options = json.loads(row["distractors"])
                     index = int(answer[-1])
@@ -434,7 +442,7 @@ class Store:
             if mode == "review":
                 stage = row["stage"]
                 if correct and not hinted:
-                    last = db.execute("SELECT created FROM attempts WHERE word_id=? AND mode='review' AND correct=1 AND hinted=0 ORDER BY id DESC LIMIT 1 OFFSET 1", (word_id,)).fetchone()
+                    last = db.execute("SELECT created FROM attempts WHERE word_id=? AND created>? AND mode='review' AND correct=1 AND hinted=0 ORDER BY id DESC LIMIT 1 OFFSET 1", (word_id,row["recall_reset_at"])).fetchone()
                     if not last or last["created"][:10] != stamp[:10]:
                         stage = min(stage + 1, 5)
                     interval = [1, 1, 3, 7, 14, 30][stage]
@@ -501,6 +509,13 @@ class Store:
             validate_audio_urls(w.get("audio_urls", {}))
             if w.get("pronunciation_accent", "") not in ("", "uk", "us"):
                 raise ValueError("Invalid pronunciation choice in backup.")
+            reset = w.get("recall_reset_at", "")
+            if reset:
+                try:
+                    if datetime.fromisoformat(reset).tzinfo is None:
+                        raise ValueError()
+                except (ValueError, TypeError):
+                    raise ValueError("Invalid spelling reset date in backup.") from None
             validated.append((w, item))
         for a in attempts:
             if not isinstance(a, dict) or a.get("word_id") not in ids or a.get("mode") not in ["review", "drill", "correction", "meaning"] or a.get("correct") not in [0, 1] or a.get("hinted") not in [0, 1] or not isinstance(a.get("answer"), str) or len(a["answer"]) > 200 or not isinstance(a.get("elapsed_ms"), int) or not 0 <= a["elapsed_ms"] <= 86400000:
@@ -521,6 +536,7 @@ class Store:
                 db.execute("UPDATE words SET audio_flagged=?,audio_url=? WHERE id=?", (original.get("audio_flagged", 0), original.get("audio_url", ""), cur.lastrowid))
                 db.execute("UPDATE words SET audio_urls=? WHERE id=?", (json.dumps(original.get("audio_urls", {})), cur.lastrowid))
                 db.execute("UPDATE words SET pronunciation_accent=? WHERE id=?", (original.get("pronunciation_accent", ""),cur.lastrowid))
+                db.execute("UPDATE words SET recall_reset_at=? WHERE id=?", (original.get("recall_reset_at", ""),cur.lastrowid))
                 db.execute("UPDATE words SET meaning_flagged=?,distractors=? WHERE id=?", (original.get("meaning_flagged", 0), json.dumps(original.get("distractors", [])), cur.lastrowid))
                 id_map[original["id"]] = cur.lastrowid
                 added += 1
