@@ -58,3 +58,11 @@ class LatestTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already in your notebook"):
             self.store.edit_word(self.id, {"word": "colour", "definition": "Changed"})
         self.assertEqual(self.store.export()["words"], before["words"])
+
+    def test_volume_is_saved_and_validated(self):
+        for value in (0, 35, 100):
+            self.store.save_settings({"audio_volume": value})
+            self.assertEqual(Store(self.store.path).settings()["audio_volume"], value)
+        for value in (-1, 101, True, "35"):
+            with self.assertRaises(ValueError):
+                self.store.save_settings({"audio_volume": value})

@@ -18,7 +18,7 @@ DEFAULTS = {
     "sentence_enabled": True, "definition_enabled": True, "audio_enabled": True,
     "meaning_enabled": True, "preparation_method": "api", "offline_batch_size": 20,
     "quiz_interval_mode": "fixed", "quiz_interval_min": 5, "quiz_interval_max": 5,
-    "review_session_size": 10,
+    "review_session_size": 10, "audio_volume": 100,
     "pronunciation_accent": "uk",
 }
 
@@ -146,7 +146,7 @@ class Store:
                 raise ValueError("Quiz intervals must be whole numbers between 1 and 10.")
         if values["quiz_interval_min"] > values["quiz_interval_max"] or values["quiz_interval_mode"] == "fixed" and values["quiz_interval_min"] != values["quiz_interval_max"]:
             raise ValueError("The minimum quiz interval cannot exceed the maximum; fixed intervals need matching values.")
-        for key, low, high in [("review_session_size", 1, 100), ("offline_batch_size", 1, 100), ("proxy_port", 1, 65535), ("batch_size", 1, 25), ("daily_budget", 1, 2000), ("requests_per_minute", 1, 60)]:
+        for key, low, high in [("audio_volume", 0, 100), ("review_session_size", 1, 100), ("offline_batch_size", 1, 100), ("proxy_port", 1, 65535), ("batch_size", 1, 25), ("daily_budget", 1, 2000), ("requests_per_minute", 1, 60)]:
             if type(values[key]) is not int or not low <= values[key] <= high:
                 raise ValueError(f"{key.replace('_', ' ').capitalize()} must be between {low} and {high}.")
         if values["proxy_type"] not in ["http", "socks5h"]:
