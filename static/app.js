@@ -28,6 +28,7 @@ const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">$
 function hydrateIcons(root = document) { $$('[data-icon]', root).forEach(el => el.innerHTML = icon(el.dataset.icon)); }
 let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer, audioSequence = 0, answerBusy = false, drillMatches = [], drillHighlight = 0, preparedPreviewText = null;
 let pendingFailure = null;
+let settingsBaseline = null, pendingSettingsPage = null;
 let preparationPreviewVersion = 0, preparationPreviewTimer, preparationPreviewController = null, preparationApplying = false, stalePreparationIds = [];
 const preparationPending = word => word.status !== 'ready' || !!word.meaning_flagged;
 const token = $('meta[name="typewriter-token"]').content;
@@ -83,14 +84,21 @@ async function useAnotherLLM() {
   pendingFailure = null;$('#failure-dialog').close();
   await refresh();fillSettings();openPreparation(ids?.length ? ids : undefined);
 }
-function navigate(page) {
+function navigate(page, force = false) {
   if (!['today','words','progress','settings'].includes(page)) page = 'today';
+  if (!force && currentPage === 'settings' && page !== 'settings' && settingsDirty()) {
+    pendingSettingsPage = page;
+    history.replaceState(null,'','#settings');
+    if (!$('#unsaved-settings-dialog').open) $('#unsaved-settings-dialog').showModal();
+    return;
+  }
+  const previousPage = currentPage;
   currentPage = page;
   $$('.page').forEach(el => el.hidden = el.id !== 'page-' + page);
   $$('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.page === page));
   $('#page-title').textContent = ({today:'Today',words:'My words',progress:'Progress',settings:'Settings'})[page];
   if (location.hash !== '#' + page) history.replaceState(null, '', '#' + page);
-  if (page === 'settings' && state) fillSettings();
+  if (page === 'settings' && state && (previousPage !== 'settings' || settingsBaseline === null)) fillSettings();
   window.scrollTo({top:0,behavior:'instant'});
 }
 function badge(word) {
@@ -179,6 +187,16 @@ function fillSettings() {
   form.elements.quiz_interval_fixed.value = state.settings.quiz_interval_min;
   updateQuizRhythm();
   $('#proxy-password-note').textContent = state.settings.proxy_password_set ? 'saved locally' : 'optional';
+  settingsBaseline = JSON.stringify(settingsPayload());updateSettingsDirty();
+}
+function settingsDirty() {return settingsBaseline !== null && JSON.stringify(settingsPayload()) !== settingsBaseline;}
+function updateSettingsDirty() {$('#settings-unsaved-note').hidden = !settingsDirty();}
+async function leaveSettings(save) {
+  if (save) await saveSettings();else fillSettings();
+  const page = pendingSettingsPage;pendingSettingsPage = null;
+  $('#unsaved-settings-dialog').close();
+  if (page) navigate(page,true);
+  if (save) toast('Settings saved.');
 }
 function updateQuizRhythm(changed) {
   const form = $('#settings-form'), fixed = form.elements.quiz_interval_mode.value === 'fixed';
@@ -846,6 +864,8 @@ $('#prepared-file').addEventListener('change',event=>guarded(async()=>{
 }));
 
 const actions = {
+  'settings-save-leave':()=>leaveSettings(true), 'settings-discard-leave':()=>leaveSettings(false),
+  'settings-keep-editing':()=>{pendingSettingsPage=null;$('#unsaved-settings-dialog').close();},
   add:() => openWord(), starter:addStarter, review:() => startReview(), 'review-endless':() => startReview(undefined,true), 'choose-drill':() => chooseDrill(),
   'prepare-all':() => prepare(), 'prepare-selected':() => prepare([...selected]),
   'prepare-again':() => openPreparation([...selected],true),
@@ -929,6 +949,9 @@ $('#word-form').elements.word.addEventListener('input',() => {dictionaryData = n
 $('#practice-show').addEventListener('change',event => {if (practice) {practice.show = event.target.checked;$('#practice-word').textContent = practice.show ? currentWord().word : '';}});
 $('#settings-form').elements.preparation_method.addEventListener('change',event => {$('#settings-form').elements.auto_ai.disabled = event.target.value !== 'api';});
 $('#settings-form').addEventListener('submit',event => {event.preventDefault();guarded(async () => {await saveSettings();await refresh();toast('Settings saved.');},$('#settings-form button[type=submit]'));});
+$('#settings-form').addEventListener('input',updateSettingsDirty);
+$('#settings-form').addEventListener('change',updateSettingsDirty);
+window.addEventListener('beforeunload',event=>{if(settingsDirty()){event.preventDefault();event.returnValue='';}});
 $('#confirm-delete').addEventListener('click',() => guarded(async () => {await api('/words/'+deletingId,'DELETE');$('#confirm-dialog').close();$('#word-dialog').close();await refresh();toast('Word removed.');},$('#confirm-delete')));
 $('#import-file').addEventListener('change',event => guarded(async () => {const file = event.target.files[0];if (!file) return;if (file.size > 32*1024*1024) throw new Error('Choose a backup smaller than 32 MB.');let backup;try {backup=JSON.parse(await file.text());} catch {throw new Error('That file is not a valid JSON backup.');}const r=await api('/import','POST',backup);await refresh();toast(`${r.added} words imported. ${r.skipped} existing words kept.`);event.target.value='';}));
 $('#word-dialog').addEventListener('close',() => {$('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();});
