@@ -72,7 +72,7 @@ dialog>.toast{position:sticky;bottom:0;left:auto;transform:none;width:auto;max-w
 
 .preparation-status{font-size:12px;line-height:1.7;overflow-wrap:anywhere}.preparation-status:not(:empty){margin-top:14px;padding:12px 14px;border-radius:6px;background:var(--green-light);border:1px solid #d9e0cf}.preparation-status[data-state="error"]{color:var(--red);background:#f8eee7;border-color:#ead5c6}.preparation-status[data-state="checking"]::before{content:"";display:inline-block;width:11px;height:11px;border:2px solid #bacabb;border-top-color:var(--green);border-radius:50%;margin-right:8px;vertical-align:-2px;animation:preparation-spin .7s linear infinite}.preparation-status[data-state="kept"]{background:var(--cream)}@keyframes preparation-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.preparation-status[data-state="checking"]::before{animation:none}}
 
-.pronunciation-notice{padding:14px 0;border-bottom:1px solid var(--line)}.small-dialog .dialog-footer,#pronunciation-choice-dialog .dialog-footer{flex-wrap:wrap}.pronunciation-notice .checkbox-label{align-items:flex-start}
+.pronunciation-notice{padding:14px 0;border-bottom:1px solid var(--line)}.small-dialog .dialog-footer,#pronunciation-choice-dialog .dialog-footer,#review-complete-dialog .dialog-footer{flex-wrap:wrap}.pronunciation-notice .checkbox-label{align-items:flex-start}
 
 .volume-setting {margin:22px 0;padding:18px;border:1px solid var(--line);border-radius:14px}
 .volume-setting input[type=range] {width:100%;accent-color:var(--green)}
@@ -84,3 +84,5 @@ dialog>.toast{position:sticky;bottom:0;left:auto;transform:none;width:auto;max-w
 .review-ranking-help summary:focus-visible {outline:2px solid var(--green);outline-offset:3px;border-radius:14px}
 .review-ranking-help>div {padding:0 16px 16px;font-size:13px}
 .review-ranking-help p+p {margin-top:12px}
+.volume-setting .rhythm-slider-label {display:flex;justify-content:space-between;align-items:center;gap:12px}
+.volume-setting output {min-width:52px;flex-shrink:0;font-family:var(--sans);font-size:13px}

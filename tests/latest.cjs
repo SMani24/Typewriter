@@ -134,6 +134,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.locator('#review-ranking-help summary').focus();await page.keyboard.press('Enter');
     assert(await page.locator('#review-ranking-help').evaluate(d=>d.open));
     assert((await page.locator('#review-ranking-help').innerText()).includes('last eight unaided spelling reviews'));
+    await page.locator('#review-ranking-help').scrollIntoViewIfNeeded();await screenshot('settings-ranking');
     await page.locator('.nav-item[data-page="today"]').click();
     // Clear due spelling reviews through genuine answers, then choose the next session explicitly.
     await api('/settings','PUT',{meaning_enabled:true});
@@ -144,6 +145,10 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.waitForSelector('#review-complete-dialog[open]');
     assert(await page.locator('#practice-dialog').isHidden());
     assert((await page.locator('#review-complete-note').innerText()).includes('No spelling reviews are due'));
+    await page.setViewportSize({width:390,height:844});
+    assert(await page.locator('#review-complete-dialog').evaluate(d=>d.scrollWidth<=d.clientWidth));
+    await screenshot('finished-review-mobile');
+    await page.setViewportSize({width:1360,height:1050});
     await page.locator('[data-action="review-complete-quizzes"]').click();
     await page.waitForSelector('#practice-dialog[open]');
     assert.equal(await page.locator('#practice-mode').innerText(),'MEANING QUIZ');
@@ -211,7 +216,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     assert((await page.locator('#drill-options [role="option"]').first().innerText()).startsWith('missing'));
     await page.locator('[data-close="drill-dialog"]').click();
     assert.deepEqual(errors,[]);
-    console.log('Latest checks passed: unsaved settings save/discard/keep, retained draft, and restored values.');
+    console.log('Latest checks passed: unsaved settings, accent fallback, spelling edits during practice, saved volume, keyboard-accessible ranking help, finished-review choices, foreground stale-page errors, and drill priority ordering.');
   } finally {
     if(browser) await browser.close();
     server.kill('SIGTERM');

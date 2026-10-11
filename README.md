@@ -52,6 +52,8 @@ Remove `~/.local/share/applications/typewriter.desktop` to remove the menu entry
 - Listening exercises play automatically; **Alt+P** plays or replays audio inside a session.
 - Flag incorrect pronunciation, preview recordings, or upload your own voice in the word editor.
 - Flag a wrong meaning during practice, or select existing words and prepare them again.
+- Edit the current word during a review or drill, including correcting its spelling.
+- Adjust playback volume and read the review-ranking explanation in Settings.
 - See recall accuracy, practice activity, and recurring misspellings.
 - Export and import words and history from Settings. Repeated imports don't duplicate attempts.
 
@@ -68,6 +70,8 @@ middle priority; long-overdue words gradually catch up. Correct unaided reviews 
 through 1, 3, 7, 14, and 30-day intervals, with at most one promotion per day. A mistake
 or hint brings the word back after ten minutes. Selecting words allows an earlier review.
 Quiz questions use their own meaning results to choose words, separately from spelling.
+The [ranking guide](docs/review-ranking.md) explains eligibility, the exact score, due
+dates, worked examples, limitations, and possible alternatives.
 
 Words with at least two misses in their last eight unaided spelling reviews appear
 as **Worth a drill** on Today and in the notebook and word picker. Three consecutive
@@ -83,6 +87,8 @@ extra practice, choosing another set using your latest performance. **Endless re
 in the selection bar stays within the selected words. Meaning-only sessions can
 continue endlessly too. Each answer is saved immediately; ending shows your totals.
 Repeated successes still earn at most one spelling-stage promotion per day.
+When no spelling reviews are due, **Start my review** offers endless spelling practice
+or meaning quizzes. Choosing only meaning exercises in Settings starts quizzes directly.
 
 In **Settings → Exercises & sessions → Meaning quiz rhythm**, use the sliders for a
 fixed interval (five spelling words by default) or a random inclusive range such as
@@ -94,7 +100,9 @@ the only available exercise, the session contains quizzes throughout.
 Press **Enter** after quiz feedback when you're ready to continue.
 
 Choose **UK or US pronunciation** in Settings. Dictionary playback and previews use
-that accent; unavailable accents are reported rather than replaced silently. Uploaded
+that accent unless the word has its own saved accent choice. New words are checked in
+the background; if the preferred accent is missing, you can accept an available
+alternative for those words. Change a word’s accent in its editor. Uploaded
 recordings take precedence. Check a pronunciation in the word editor before including
 it in audio-only exercises.
 Existing Cambridge recordings start unchecked. Cambridge lookups only offer audio from
@@ -104,6 +112,17 @@ an exact matching headword, avoiding recordings for a base word or redirected ty
 playback, press **Alt+P** or Listen once to grant a playback gesture. Checked recordings
 load silently ahead of playback, and replay reuses the loaded clip. Recordings are
 privately cached by their revision so an uploaded replacement uses a fresh URL.
+
+The **Playback volume** slider controls practice audio and previews, including mute.
+Settings prompt you to save or discard changes before leaving the page. Changing a
+word's spelling restarts its schedule and word-level statistics while preserving
+past answers in global history; check its sentence, tip, and pronunciation again.
+
+To repair accent availability in an existing notebook, run
+`python desktop/repair_pronunciations.py --apply`. This creates a database backup,
+checks Cambridge through your configured proxy, and saves an available alternative
+where the preferred accent is missing. It preserves uploads and pronunciation flags,
+and writes a private report in `data/`.
 
 ## Gemini and request limits
 
