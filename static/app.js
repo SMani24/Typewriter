@@ -27,7 +27,11 @@ const paths = {
 const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.book}</svg>`;
 function hydrateIcons(root = document) { $$('[data-icon]', root).forEach(el => el.innerHTML = icon(el.dataset.icon)); }
 let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer, audioSequence = 0, answerBusy = false, drillMatches = [], drillHighlight = 0, preparedPreviewText = null;
-let pendingFailure = null;
+let pendingFailure = null, focusedModal = null;
+document.addEventListener('focusin',event=>{
+  const modal = event.target.closest('dialog[open]');
+  if (modal) focusedModal = modal;
+});
 let settingsBaseline = null, pendingSettingsPage = null;
 let pronunciationNotices = [], pronunciationChecking = false;
 let preparationPreviewVersion = 0, preparationPreviewTimer, preparationPreviewController = null, preparationApplying = false, stalePreparationIds = [];
@@ -43,11 +47,12 @@ async function api(path, method = 'GET', data, signal) {
 function toast(message, error = false) {
   clearTimeout(toastTimer);
   // Native modal dialogs sit above the page, including any page-level z-index.
-  const host = $$('dialog[open]').at(-1) || document.body;
+  const host = document.activeElement?.closest('dialog[open]') || (focusedModal?.open ? focusedModal : null) || $$('dialog[open]').at(-1) || document.body;
   host.append($('#toast'));
   $('#toast').textContent = message;
   $('#toast').classList.toggle('error', error);
   $('#toast').hidden = false;
+  if (error && host !== document.body) $('#toast').scrollIntoView({block:'nearest'});
   toastTimer = setTimeout(() => $('#toast').hidden = true, error ? 8500 : 4500);
 }
 async function guarded(action, button) {

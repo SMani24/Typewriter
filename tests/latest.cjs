@@ -166,6 +166,30 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.waitForSelector('#practice-dialog[open]');
     assert(await page.locator('#review-complete-dialog').isHidden());
     await end();
+    // The word editor is earlier in DOM order than practice, but is the top modal.
+    await review('essential');
+    await page.locator('[data-action="edit-practice-word"]').click();
+    await page.route('**/api/words/*',async route=>{
+      if(route.request().method()==='PATCH') await route.fulfill({status:403,contentType:'application/json',body:JSON.stringify({error:'Please refresh this page before changing your notebook.'})});
+      else await route.continue();
+    });
+    await page.locator('#word-form input[name="tip"]').fill('Keep this draft.');
+    await page.locator('#word-submit').click();
+    await page.waitForSelector('#word-dialog > #toast.error:not([hidden])');
+    assert((await page.locator('#toast').innerText()).includes('refresh this page'));
+    assert.equal(await page.locator('#word-form input[name="tip"]').inputValue(),'Keep this draft.');
+    const toastBox=await page.locator('#toast').boundingBox();
+    assert(toastBox.y>=0 && toastBox.y+toastBox.height<=1050);
+    await screenshot('nested-editor-error');
+    await page.unroute('**/api/words/*');
+    await page.locator('[data-close="word-dialog"]').click();await end();
+    await page.getByRole('button',{name:'Add words',exact:true}).click();
+    await page.locator('#word-form input[name="word"]').fill('broken');
+    await page.route('**/api/words',route=>route.fulfill({status:403,contentType:'application/json',body:JSON.stringify({error:'Please refresh this page before changing your notebook.'})}));
+    await page.locator('#word-submit').click();
+    await page.waitForSelector('#word-dialog > #toast.error:not([hidden])');
+    await page.unroute('**/api/words');
+    await page.locator('[data-close="word-dialog"]').click();
     assert.deepEqual(errors,[]);
     console.log('Latest checks passed: unsaved settings save/discard/keep, retained draft, and restored values.');
   } finally {

@@ -4,8 +4,6 @@
 
 ## Bugs to Fix
 
-When in a submenu (for example adding words) and an error occurs, the error appears blurred in the background! (the specific instance was when the page needed refresh and I was trying to add words)
-
 The word suggestion in the drill are not sorted based on their priority.
 
 ## Requests
