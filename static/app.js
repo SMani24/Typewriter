@@ -170,7 +170,7 @@ function render() {
   if (currentPage !== 'settings') {$$('audio').forEach(audio=>audio.volume = (state.settings.audio_volume ?? 100) / 100);}
 }
 function renderDrillSuggestions() {
-  const words = state.words.filter(w=>w.drill_recommended).sort((a,b)=>b.recent_mistakes-a.recent_mistakes || b.review_priority-a.review_priority).slice(0,3);
+  const words = state.words.filter(w=>w.drill_recommended).sort(TypewriterReview.comparePriority).slice(0,3);
   $('#drill-suggestions').hidden = !words.length || !state.settings.drill_enabled;
   $('#drill-suggestions').innerHTML = `<span class="eyebrow">WORTH A DRILL</span>${words.map(w=>`<button class="drill-suggestion" data-drill="${w.id}"><span>${escapeHtml(w.word)}<small>${w.recent_mistakes} misses in ${w.recent_reviews} recent reviews</small></span>${icon('arrow')}</button>`).join('')}<p class="field-note">Suggestions clear after three consecutive correct unaided reviews. Drills and corrections don’t count as recall.</p>`;
 }
@@ -397,7 +397,7 @@ function showDrillOptions(open) {
 }
 function filterDrillWords() {
   const query = $('#drill-search').value.trim().toLowerCase();
-  drillMatches = state.words.filter(w => w.word.includes(query)).sort((a,b) => Number(b.word.startsWith(query)) - Number(a.word.startsWith(query)) || Number(!!b.drill_recommended)-Number(!!a.drill_recommended) || a.word.localeCompare(b.word));
+  drillMatches = state.words.filter(w => w.word.includes(query)).sort((a,b) => Number(b.word.startsWith(query)) - Number(a.word.startsWith(query)) || TypewriterReview.comparePriority(a,b));
   drillHighlight = Math.max(0, drillMatches.findIndex(w => w.word === query));
   $('#drill-word').value = drillMatches.find(w => w.word === query)?.id || '';
   showDrillOptions(true);
@@ -431,7 +431,7 @@ function reviewPool(ids, endless, settings) {
   const spellable = candidates.filter(w => exerciseTypes(w,settings).some(type=>type!=='meaning'));
   const due = spellable.filter(w=>w.is_due);
   const spelling = (endless ? (due.length ? due : spellable) : ids ? spellable : due)
-    .sort((a,b) => (b.review_priority ?? 0)-(a.review_priority ?? 0) || a.due.localeCompare(b.due));
+    .sort(TypewriterReview.comparePriority);
   const quizzes = candidates.filter(w => exerciseTypes(w,settings).includes('meaning'))
     .sort((a,b) => (b.meaning_priority ?? 0)-(a.meaning_priority ?? 0));
   const limit = endless ? 10 : ids ? candidates.length : (settings.review_session_size ?? 10);

@@ -190,6 +190,26 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.waitForSelector('#word-dialog > #toast.error:not([hidden])');
     await page.unroute('**/api/words');
     await page.locator('[data-close="word-dialog"]').click();
+    const current=await api('/state');
+    const high=current.words.find(w=>w.word==='missing'),low=current.words.find(w=>w.word==='essential');
+    for(let i=0;i<2;i++) await api('/words/'+high.id+'/attempts','POST',{answer:'missng',mode:'review'});
+    for(let i=0;i<8;i++) await api('/words/'+low.id+'/attempts','POST',{answer:'essentil',mode:'review'});
+    // A hint on the lower-miss word adds the needs-help boost without inflating misses.
+    await api('/words/'+high.id+'/attempts','POST',{answer:'missing',mode:'review',hinted:true});
+    execFileSync(path.join(__dirname,'..','.venv','bin','python'),['-c',
+      'import sqlite3,sys;from datetime import datetime,timedelta,timezone;db=sqlite3.connect(sys.argv[1]);db.execute("UPDATE words SET due=? WHERE id=?",((datetime.now(timezone.utc)-timedelta(days=28)).isoformat(),int(sys.argv[2])));db.commit()',path.join(directory,'typewriter.db'),String(high.id)]);
+    await page.reload();await page.waitForSelector('#app-content:not([hidden])');
+    await page.locator('.nav-item[data-page="today"]').click();
+    const expected=(await api('/state')).words.filter(w=>w.drill_recommended).sort((a,b)=>b.review_priority-a.review_priority || a.due.localeCompare(b.due) || a.id-b.id);
+    assert.equal(expected[0].id,high.id);
+    assert.equal(await page.locator('#drill-suggestions [data-drill]').first().getAttribute('data-drill'),String(high.id));
+    await page.locator('[data-action="choose-drill"]').click();
+    await page.locator('#drill-search').fill('');
+    const all=(await api('/state')).words.sort((a,b)=>b.review_priority-a.review_priority || a.due.localeCompare(b.due) || a.id-b.id);
+    assert((await page.locator('#drill-options [role="option"]').first().innerText()).startsWith(all[0].word));
+    await page.locator('#drill-search').fill('mis');
+    assert((await page.locator('#drill-options [role="option"]').first().innerText()).startsWith('missing'));
+    await page.locator('[data-close="drill-dialog"]').click();
     assert.deepEqual(errors,[]);
     console.log('Latest checks passed: unsaved settings save/discard/keep, retained draft, and restored values.');
   } finally {

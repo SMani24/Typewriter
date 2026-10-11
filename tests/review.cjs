@@ -89,3 +89,9 @@ assert.equal(session.questionsDone,2);
 assert(session.meaningOnly);
 assert.equal(rules.replenish(rules.create(spelling(),quizzes,fixed),spelling(),quizzes),false);
 console.log('Review checks passed: fixed/random rhythm, correction and skip counting, unavailable words, endless cadence across refills, safe retries, bounded queues, one-word repeats, and meaning-only sessions.');
+
+// Total priority wins over mistake count; ties use due time and then a stable ID.
+const ranked=[{id:1,review_priority:5.6,recent_mistakes:8,due:'2026-01-10'},
+  {id:2,review_priority:6,recent_mistakes:2,due:'2026-01-01'},
+  {id:3,review_priority:6,recent_mistakes:2,due:'2026-01-02'}].sort(rules.comparePriority);
+assert.deepEqual(ranked.map(w=>w.id),[2,3,1]);
