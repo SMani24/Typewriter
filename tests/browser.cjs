@@ -29,6 +29,7 @@ directory=Path(sys.argv[1])
 app=create_app(directory,directory/"keys.txt",background=False)
 # An empty provider result checks that partial failures remain visible.
 app.extensions["enrichment"].generate=lambda words: {}
+app.extensions["dictionary"].pronunciation=lambda word_id: {"id":word_id,"available":["uk","us"],"preferred":"uk","uploaded":False,"alternative":None}
 # A synthetic tone checks actual browser decoding and playback under the app's CSP.
 # It avoids network calls and committing dictionary recordings as test assets.
 clip=directory/"test-audio.wav"

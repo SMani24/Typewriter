@@ -25,7 +25,7 @@ with wave.open(str(p/"audio"/"00000000000000000000000000000000.wav"),"wb") as a:
     a.setparams((1,2,16000,0,"NONE","not compressed"))
     a.writeframes(b"".join(struct.pack("<h",int(5000*math.sin(2*math.pi*440*i/16000))) for i in range(8000)))
 s.set_audio(ids[0],file="00000000000000000000000000000000.wav",verified=True)
-app.extensions["dictionary"].lookup=lambda word: {"audio":{},"senses":[]}
+app.extensions["dictionary"].lookup=lambda word,**kwargs: {"audio":{},"senses":[]}
 def no_network(*args,**kwargs):
     raise AssertionError("No provider requests allowed in browser checks")
 app.extensions["network"].request=no_network

@@ -25,7 +25,7 @@ with wave.open(str(p/"audio"/"00000000000000000000000000000000.wav"),"wb") as a:
     a.setparams((1,2,16000,0,"NONE","not compressed"))
     a.writeframes(b"".join(struct.pack("<h",int(5000*math.sin(2*math.pi*440*i/16000))) for i in range(8000)))
 s.set_audio(ids[0],file="00000000000000000000000000000000.wav",verified=True)
-app.extensions["dictionary"].lookup=lambda word: {"audio":{},"senses":[]}
+app.extensions["dictionary"].lookup=lambda word,**kwargs: {"audio":{"us":"https://dictionary.cambridge.org/color-us.mp3"} if word=="color" else {},"senses":[]}
 def no_network(*args,**kwargs):
     raise AssertionError("No provider requests allowed in browser checks")
 app.extensions["network"].request=no_network
@@ -89,6 +89,21 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     assert.equal(await page.locator('input[name="review_session_size"]').inputValue(),'18');
     await page.locator('input[name="review_session_size"]').fill('12');
     assert(await page.locator('#settings-unsaved-note').isHidden());
+    await page.getByRole('button',{name:'Add words',exact:true}).click();
+    await page.locator('#word-form input[name="word"]').fill('color');
+    await page.getByRole('button',{name:'Add to notebook',exact:true}).click();
+    await page.waitForSelector('#pronunciation-choice-dialog[open]');
+    assert((await page.locator('#pronunciation-notices').innerText()).includes('UK audio is unavailable. Use US'));
+    await page.locator('[data-action="use-alternate-pronunciations"]').click();
+    await page.waitForFunction(()=>!document.querySelector('#pronunciation-choice-dialog').open);
+    const color=(await api('/state')).words.find(w=>w.word==='color');
+    assert.equal(color.pronunciation_accent,'us');
+    assert.equal((await api('/state')).settings.pronunciation_accent,'uk');
+    await page.locator('.nav-item[data-page="words"]').click();
+    await page.locator('#word-search').fill('color');
+    await page.getByRole('button',{name:'Edit color',exact:true}).click();
+    assert.equal(await page.locator('#word-pronunciation-accent').inputValue(),'us');
+    await page.locator('[data-close="word-dialog"]').click();
     assert.deepEqual(errors,[]);
     console.log('Latest checks passed: unsaved settings save/discard/keep, retained draft, and restored values.');
   } finally {

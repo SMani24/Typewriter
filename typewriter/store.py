@@ -98,7 +98,7 @@ class Store:
                 );
             """)
             columns = {r["name"] for r in db.execute("PRAGMA table_info(words)")}
-            for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''", "meaning_flagged": "INTEGER NOT NULL DEFAULT 0", "distractors": "TEXT NOT NULL DEFAULT '[]'", "audio_urls": "TEXT NOT NULL DEFAULT '{}'"}.items():
+            for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''", "meaning_flagged": "INTEGER NOT NULL DEFAULT 0", "distractors": "TEXT NOT NULL DEFAULT '[]'", "audio_urls": "TEXT NOT NULL DEFAULT '{}'", "pronunciation_accent": "TEXT NOT NULL DEFAULT ''"}.items():
                 if name not in columns:
                     db.execute(f"ALTER TABLE words ADD COLUMN {name} {definition}")
 
@@ -206,7 +206,8 @@ class Store:
                 w["distractors"] = json.loads(w["distractors"])
                 w["audio_urls"] = json.loads(w["audio_urls"])
                 w["audio_revision"] = hashlib.sha256(json.dumps([w["audio_file"],w["audio_urls"],w["audio_url"],w["audio_flagged"]],sort_keys=True).encode()).hexdigest()[:16]
-                selected_audio = w["audio_urls"].get(accent) if w["audio_urls"] else w["audio_url"] if accent == "uk" else ""
+                selected_accent = w["pronunciation_accent"] or accent
+                selected_audio = w["audio_urls"].get(selected_accent) if w["audio_urls"] else w["audio_url"] if selected_accent == "uk" else ""
                 w["audio_eligible"] = bool(w["audio_verified"] and not w["audio_flagged"] and (w["audio_file"] or selected_audio))
                 w["clue"] = blank_sentence(w["word"], w["sentence"]) if contains_word(w["word"], w["sentence"]) else ""
                 w["accuracy"] = round(100 * w["correct_reviews"] / w["reviews"]) if w["reviews"] else None
@@ -295,6 +296,21 @@ class Store:
         if (audio != original["audio_url"] or audio_urls != original["audio_urls"]) and not original["audio_file"]:
             with self.db() as db:
                 db.execute("UPDATE words SET audio_verified=0 WHERE id=?", (word_id,))
+        return self.word(word_id)
+
+    def set_pronunciation(self, word_id, accent, urls=None):
+        if accent not in ("", "uk", "us"):
+            raise ValueError("Choose the default, UK, or US pronunciation.")
+        word = self.word(word_id)
+        if not word:
+            raise KeyError("Word not found.")
+        keep_legacy = urls is None and not word["audio_urls"]
+        urls = word["audio_urls"] if urls is None else validate_audio_urls(urls)
+        preferred = self.settings()["pronunciation_accent"]
+        old_url = word["audio_urls"].get(word["pronunciation_accent"] or preferred) or word["audio_url"]
+        new_url = urls.get(accent or preferred, word["audio_url"] if keep_legacy and (accent or preferred) == "uk" else "")
+        with self.db() as db:
+            db.execute("UPDATE words SET pronunciation_accent=?,audio_urls=?,audio_url=?,audio_verified=? WHERE id=?", (accent,json.dumps(urls),new_url,int(bool(word["audio_verified"] and (word["audio_file"] or old_url == new_url))),word_id))
         return self.word(word_id)
 
     def set_audio(self, word_id, *, flagged=None, verified=None, file=None):
@@ -483,6 +499,8 @@ class Store:
             if not isinstance(audio_url, str) or audio_url and not re.fullmatch(r"https://dictionary\.cambridge\.org/[^\s]+", audio_url):
                 raise ValueError("Invalid pronunciation URL in backup.")
             validate_audio_urls(w.get("audio_urls", {}))
+            if w.get("pronunciation_accent", "") not in ("", "uk", "us"):
+                raise ValueError("Invalid pronunciation choice in backup.")
             validated.append((w, item))
         for a in attempts:
             if not isinstance(a, dict) or a.get("word_id") not in ids or a.get("mode") not in ["review", "drill", "correction", "meaning"] or a.get("correct") not in [0, 1] or a.get("hinted") not in [0, 1] or not isinstance(a.get("answer"), str) or len(a["answer"]) > 200 or not isinstance(a.get("elapsed_ms"), int) or not 0 <= a["elapsed_ms"] <= 86400000:
@@ -502,6 +520,7 @@ class Store:
                 cur = db.execute("INSERT INTO words (word,definition,sentence,tip,tag,sources,created,updated,due,stage,status) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (item["word"], item["definition"], item["sentence"], item["tip"], item["tag"], json.dumps({k: "imported" for k in ["definition", "sentence", "tip"] if item[k]}), original["created"], original["updated"], original["due"], original["stage"], status))
                 db.execute("UPDATE words SET audio_flagged=?,audio_url=? WHERE id=?", (original.get("audio_flagged", 0), original.get("audio_url", ""), cur.lastrowid))
                 db.execute("UPDATE words SET audio_urls=? WHERE id=?", (json.dumps(original.get("audio_urls", {})), cur.lastrowid))
+                db.execute("UPDATE words SET pronunciation_accent=? WHERE id=?", (original.get("pronunciation_accent", ""),cur.lastrowid))
                 db.execute("UPDATE words SET meaning_flagged=?,distractors=? WHERE id=?", (original.get("meaning_flagged", 0), json.dumps(original.get("distractors", [])), cur.lastrowid))
                 id_map[original["id"]] = cur.lastrowid
                 added += 1

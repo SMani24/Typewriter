@@ -122,6 +122,14 @@ def create_app(data_dir=None, keys_path=None, background=True):
         data = body()
         return jsonify(store.set_audio(word_id, flagged=data.get("flagged"), verified=data.get("verified")))
 
+    @app.post("/api/words/<int:word_id>/pronunciation/check")
+    def check_pronunciation(word_id):
+        return jsonify(dictionary.pronunciation(word_id))
+
+    @app.patch("/api/words/<int:word_id>/pronunciation")
+    def pronunciation_choice(word_id):
+        return jsonify(store.set_pronunciation(word_id,body().get("accent")))
+
     @app.post("/api/words/<int:word_id>/audio")
     def upload_audio(word_id):
         file = request.files.get("audio")

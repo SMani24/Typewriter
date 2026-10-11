@@ -15,7 +15,7 @@ class Dictionary:
         self.store, self.network = store, network
         self._download_locks = {}
 
-    def lookup(self, word):
+    def lookup(self, word, timeout=None):
         word = clean_word(word)
         cache_key = "cambridge-v2:" + word
         with self.store.db() as db:
@@ -23,7 +23,7 @@ class Dictionary:
         if cached:
             return {**json.loads(cached["value"]), "cached": True}
         url = "https://dictionary.cambridge.org/dictionary/english/" + quote(word.replace(" ", "-"))
-        response = self.network.request("GET", url, headers={"User-Agent": USER_AGENT})
+        response = self.network.request("GET", url, headers={"User-Agent": USER_AGENT}, **({"timeout": timeout} if timeout else {}))
         if response.status_code != 200:
             raise ValueError("Cambridge lookup is unavailable. You can enter the meaning manually or use Gemini.")
         result = self.parse(word, response.text, response.url if isinstance(response.url, str) else url)
@@ -68,13 +68,33 @@ class Dictionary:
                     break
         return {"word": word, "senses": senses, "audio": audio, "source_url": url, "audio_matches_word": bool(audio)}
 
-    def audio(self, word_id, preview=False, accent=None):
-        accent = accent or self.store.settings()["pronunciation_accent"]
-        if accent not in ("uk", "us"):
-            raise ValueError("Choose UK or US pronunciation.")
+    def pronunciation(self, word_id, choose_alternative=False):
         word = self.store.word(word_id)
         if not word:
             raise KeyError("Word not found.")
+        preferred = self.store.settings()["pronunciation_accent"]
+        if word["audio_file"]:
+            return {"id":word_id,"word":word["word"],"preferred":preferred,"uploaded":True,"available":[],"alternative":None}
+        try:
+            urls = self.lookup(word["word"],timeout=(5,10))["audio"]
+        except ValueError as error:
+            if not str(error).startswith("No dictionary entry found"):
+                raise
+            urls = {}
+        alternative = ("us" if preferred == "uk" else "uk") if preferred not in urls else None
+        if alternative not in urls:
+            alternative = None
+        chosen = alternative if choose_alternative and alternative else word["pronunciation_accent"]
+        saved = self.store.set_pronunciation(word_id,chosen,urls)
+        return {"id":word_id,"word":word["word"],"preferred":preferred,"uploaded":False,"available":list(urls),"alternative":alternative,"selected":saved["pronunciation_accent"] or preferred}
+
+    def audio(self, word_id, preview=False, accent=None):
+        word = self.store.word(word_id)
+        if not word:
+            raise KeyError("Word not found.")
+        accent = accent or word["pronunciation_accent"] or self.store.settings()["pronunciation_accent"]
+        if accent not in ("uk", "us"):
+            raise ValueError("Choose UK or US pronunciation.")
         if word["audio_flagged"] and not preview:
             raise ValueError("This pronunciation is flagged as incorrect. Replace or recheck it in the word editor.")
         if word["audio_file"]:

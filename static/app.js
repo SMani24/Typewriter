@@ -29,6 +29,7 @@ function hydrateIcons(root = document) { $$('[data-icon]', root).forEach(el => e
 let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer, audioSequence = 0, answerBusy = false, drillMatches = [], drillHighlight = 0, preparedPreviewText = null;
 let pendingFailure = null;
 let settingsBaseline = null, pendingSettingsPage = null;
+let pronunciationNotices = [], pronunciationChecking = false;
 let preparationPreviewVersion = 0, preparationPreviewTimer, preparationPreviewController = null, preparationApplying = false, stalePreparationIds = [];
 const preparationPending = word => word.status !== 'ready' || !!word.meaning_flagged;
 const token = $('meta[name="typewriter-token"]').content;
@@ -77,6 +78,37 @@ function showFailure() {
   if (!pendingFailure || $$('dialog[open]').length) return;
   $('#failure-message').textContent = pendingFailure.message;
   $('#failure-dialog').showModal();
+}
+function showPronunciationNotices() {
+  if (!pronunciationNotices.length || $$('dialog[open]').length) return;
+  $('#pronunciation-notices').innerHTML = pronunciationNotices.map(w=>`<div class="pronunciation-notice">${w.alternative ? `<label class="checkbox-label"><input type="checkbox" data-alternate-accent="${w.id}" value="${w.alternative}" checked><span><strong>${escapeHtml(w.word)}</strong><br>${w.preferred.toUpperCase()} audio is unavailable. Use ${w.alternative.toUpperCase()} for this word?</span></label>` : `<strong>${escapeHtml(w.word)}</strong><p class="field-note">${w.error ? escapeHtml(w.error) : 'No UK or US pronunciation was found. You can upload a recording in the word editor.'}</p>`}</div>`).join('');
+  $('[data-action="use-alternate-pronunciations"]').hidden = !pronunciationNotices.some(w=>w.alternative);
+  $('#pronunciation-choice-dialog').showModal();
+}
+async function checkAddedPronunciations(ids) {
+  pronunciationChecking = true;
+  $('#pronunciation-check-note').hidden=false;
+  const pending=[...ids];let done=0;
+  async function worker() {
+    while(pending.length) {
+      const id=pending.shift();
+      try {
+        const info=await api(`/words/${id}/pronunciation/check`,'POST',{});
+        if(!info.uploaded && !info.available.includes(info.preferred)) pronunciationNotices.push(info);
+      } catch(error) {
+        const word=state.words.find(w=>w.id===id);
+        pronunciationNotices.push({id,word:word?.word || 'Saved word',error:'The word is saved, but pronunciation could not be checked. '+error.message});
+      }
+      $('#pronunciation-check-note').textContent=`Checking pronunciation · ${++done}/${ids.length}`;
+    }
+  }
+  try {await Promise.all([worker(),worker()]);await refresh();}
+  finally {pronunciationChecking=false;$('#pronunciation-check-note').hidden=true;showPronunciationNotices();}
+}
+async function useAlternatePronunciations() {
+  for(const input of $$('[data-alternate-accent]:checked')) await api(`/words/${input.dataset.alternateAccent}/pronunciation`,'PATCH',{accent:input.value});
+  pronunciationNotices=[];$('#pronunciation-choice-dialog').close();await refresh();
+  toast('Pronunciation choices saved. Check each recording before audio-only practice.');
 }
 async function useAnotherLLM() {
   const ids = pendingFailure?.ids?.filter(id => state.words.some(w => w.id === id && preparationPending(w)));
@@ -303,6 +335,7 @@ async function saveWord(event) {
     }
     $('#word-dialog').close();
     await refresh();
+    if (!editingId && result.added.length) guarded(()=>checkAddedPronunciations(result.added));
   },$('#word-submit'));
 }
 
@@ -594,7 +627,7 @@ function finishPractice() {
   guarded(refresh);
 }
 function pronunciationUrl(word, preview = false) {
-  return `/api/words/${word.id}/audio?accent=${state.settings.pronunciation_accent || 'uk'}&v=${word.audio_revision || word.version || 0}${preview ? '&preview=1' : ''}`;
+  return `/api/words/${word.id}/audio?accent=${word.pronunciation_accent || state.settings.pronunciation_accent || 'uk'}&v=${word.audio_revision || word.version || 0}${preview ? '&preview=1' : ''}`;
 }
 function preparePronunciation(word) {
   const audio = $('#pronunciation');
@@ -650,6 +683,8 @@ async function prepare(ids) {
 function renderWordAudio() {
   const word = state.words.find(w => w.id === editingId);
   if (!word) return;
+  $('#word-pronunciation-accent').value = word.pronunciation_accent || '';
+  $('#word-pronunciation-accent option[value=""]').textContent = `Use Settings (${(state.settings.pronunciation_accent || 'uk').toUpperCase()})`;
   $('#audio-status').textContent = word.audio_flagged ? 'Flagged as incorrect. Excluded from audio-only exercises.' : word.audio_file ? `Your uploaded recording · ${word.audio_verified ? 'included in' : 'excluded from'} audio-only exercises.` : word.audio_verified ? 'Recording checked · included in audio-only exercises.' : 'Preview and check this recording before including it in audio-only exercises.';
   $('#audio-verified').checked = !!word.audio_verified && !word.audio_flagged;
   $('#audio-verified').disabled = !!word.audio_flagged;
@@ -854,6 +889,7 @@ async function refreshModels() {
 }
 $('#audio-upload').addEventListener('change',()=>guarded(uploadAudio));
 $('#audio-verified').addEventListener('change',event=>guarded(()=>changeWordAudio({verified:event.target.checked})));
+$('#word-pronunciation-accent').addEventListener('change',event=>guarded(async()=>{await api(`/words/${editingId}/pronunciation`,'PATCH',{accent:event.target.value});await refresh();renderWordAudio();}));
 $('#prompt-size').addEventListener('input',updatePromptCount);
 $('#prompt-scope').addEventListener('change',updatePromptCount);
 $('#prepared-response').addEventListener('input',schedulePreparedPreview);
@@ -864,6 +900,8 @@ $('#prepared-file').addEventListener('change',event=>guarded(async()=>{
 }));
 
 const actions = {
+  'use-alternate-pronunciations':useAlternatePronunciations,
+  'keep-pronunciations':()=>{pronunciationNotices=[];$('#pronunciation-choice-dialog').close();},
   'settings-save-leave':()=>leaveSettings(true), 'settings-discard-leave':()=>leaveSettings(false),
   'settings-keep-editing':()=>{pendingSettingsPage=null;$('#unsaved-settings-dialog').close();},
   add:() => openWord(), starter:addStarter, review:() => startReview(), 'review-endless':() => startReview(undefined,true), 'choose-drill':() => chooseDrill(),
@@ -960,8 +998,9 @@ $('#practice-dialog').addEventListener('cancel',event => {event.preventDefault()
 window.addEventListener('hashchange',() => navigate(location.hash.slice(1)));
 $$('dialog').forEach(dialog => dialog.addEventListener('close',() => {
   if ($('#toast').parentElement === dialog) {$('#toast').hidden = true;document.body.append($('#toast'));}
-  setTimeout(showFailure,0);
+  setTimeout(()=>{showFailure();showPronunciationNotices();},0);
 }));
+$('#pronunciation-choice-dialog').addEventListener('cancel',()=>{pronunciationNotices=[];});
 $('#failure-dialog').addEventListener('cancel',() => {pendingFailure=null;});
 $('#prompt-reevaluate').addEventListener('change',updatePromptCount);
 ['quiz_interval_mode','quiz_interval_fixed','quiz_interval_min','quiz_interval_max','meaning_enabled'].forEach(name => $('#settings-form').elements[name].addEventListener('input',event=>updateQuizRhythm(event.target)));
