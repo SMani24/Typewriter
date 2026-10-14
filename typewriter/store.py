@@ -109,6 +109,20 @@ class Store:
             for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''", "meaning_flagged": "INTEGER NOT NULL DEFAULT 0", "distractors": "TEXT NOT NULL DEFAULT '[]'", "audio_urls": "TEXT NOT NULL DEFAULT '{}'", "pronunciation_accent": "TEXT NOT NULL DEFAULT ''", "recall_reset_at": "TEXT NOT NULL DEFAULT ''", "drill_completed_at": "TEXT NOT NULL DEFAULT ''"}.items():
                 if name not in columns:
                     db.execute(f"ALTER TABLE words ADD COLUMN {name} {definition}")
+            columns = {r["name"] for r in db.execute("PRAGMA table_info(attempts)")}
+            for name, definition in {"exercise":"TEXT NOT NULL DEFAULT 'unknown'", "session_kind":"TEXT NOT NULL DEFAULT 'unknown'", "scheduler":"TEXT NOT NULL DEFAULT 'legacy'", "due_before":"TEXT NOT NULL DEFAULT ''", "stage_before":"INTEGER"}.items():
+                if name not in columns:
+                    db.execute(f"ALTER TABLE attempts ADD COLUMN {name} {definition}")
+            if db.execute("PRAGMA user_version").fetchone()[0] < 1:
+                # Canonical UTC keeps timestamp comparisons and reset cutoffs consistent.
+                for table, fields in (("words",("created","updated","due","recall_reset_at","drill_completed_at")), ("attempts",("created",))):
+                    for row in db.execute(f"SELECT * FROM {table}").fetchall():
+                        for field in fields:
+                            if row[field]:
+                                value = datetime.fromisoformat(row[field]).astimezone(timezone.utc).isoformat()
+                                if value != row[field]:
+                                    db.execute(f"UPDATE {table} SET {field}=? WHERE id=?", (value,row["id"]))
+                db.execute("PRAGMA user_version=1")
 
     @contextmanager
     def db(self):
@@ -221,7 +235,7 @@ class Store:
                 w["audio_eligible"] = bool(w["audio_verified"] and not w["audio_flagged"] and (w["audio_file"] or selected_audio))
                 w["clue"] = blank_sentence(w["word"], w["sentence"]) if contains_word(w["word"], w["sentence"]) else ""
                 w["accuracy"] = round(100 * w["correct_reviews"] / w["reviews"]) if w["reviews"] else None
-                w["is_due"] = w["due"] <= now()
+                w["is_due"] = datetime.fromisoformat(w["due"]) <= timestamp
                 w["state"] = "New" if not w["reviews"] else ("Confident" if w["stage"] >= 3 else "Learning")
                 recall = results.get((w["id"], "review", 0), {})
                 assisted = results.get((w["id"], "review", 1), {})
@@ -422,6 +436,7 @@ class Store:
             raise ValueError("Type an answer first (up to 200 characters).")
         if mode not in ["review", "drill", "correction", "meaning"] or not isinstance(data.get("hinted", False), bool):
             raise ValueError("Invalid practice mode.")
+        metadata = self.validate_attempt_metadata({"mode":mode, "exercise":data.get("exercise", "drill" if mode=="drill" else "meaning" if mode=="meaning" else "unknown"), "session_kind":data.get("session_kind", "drill" if mode=="drill" else "unknown")})
         elapsed = data.get("elapsed_ms", 0)
         if not isinstance(elapsed, int) or not 0 <= elapsed <= 86400000:
             raise ValueError("Invalid answer time.")
@@ -450,14 +465,14 @@ class Store:
                 correct = normalize_answer(answer) == row["word"]
             hinted = data.get("hinted", False)
             recorded_answer = choice["definition"][:200] if mode == "meaning" else answer.strip()
-            attempt_id = db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created) VALUES (?,?,?,?,?,?,?)", (word_id, recorded_answer, int(correct), mode, int(hinted), elapsed, stamp)).lastrowid
+            attempt_id = db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created,exercise,session_kind,scheduler,due_before,stage_before) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (word_id, recorded_answer, int(correct), mode, int(hinted), elapsed, stamp,metadata["exercise"],metadata["session_kind"],"legacy",row["due"],row["stage"])).lastrowid
             # Drilling, hints and corrections never move a word into a confident state.
             # Only one successful promotion per UTC day, even across repeat sessions.
             if mode == "review":
                 stage = row["stage"]
                 if correct and not hinted:
                     last = db.execute("SELECT created FROM attempts WHERE word_id=? AND created>? AND mode='review' AND correct=1 AND hinted=0 ORDER BY id DESC LIMIT 1 OFFSET 1", (word_id,row["recall_reset_at"])).fetchone()
-                    if not last or last["created"][:10] != stamp[:10]:
+                    if not last or datetime.fromisoformat(last["created"]).astimezone(timezone.utc).date() != datetime.fromisoformat(stamp).date():
                         stage = min(stage + 1, 5)
                     interval = [1, 1, 3, 7, 14, 30][stage]
                 else:
@@ -467,6 +482,26 @@ class Store:
                 due = (datetime.now(timezone.utc) + (timedelta(days=interval) if interval else timedelta(minutes=10))).isoformat()
                 db.execute("UPDATE words SET stage=?,due=? WHERE id=?", (stage, due, word_id))
         return {"attempt_id": attempt_id, "correct": correct, "expected": row["definition"] if mode == "meaning" else row["word"], "answer": answer.strip(), "tip": row["tip"], "word": self.word(word_id)}
+
+    @staticmethod
+    def validate_attempt_metadata(data):
+        result = {"exercise":data.get("exercise","unknown"), "session_kind":data.get("session_kind","unknown"), "scheduler":data.get("scheduler","legacy"), "due_before":data.get("due_before",""), "stage_before":data.get("stage_before")}
+        if result["exercise"] not in ("unknown","sentence","definition","audio","meaning","drill") or result["session_kind"] not in ("unknown","normal","selected","endless","drill") or result["scheduler"] != "legacy":
+            raise ValueError("Invalid practice context.")
+        mode = data.get("mode")
+        if mode == "drill" and (result["exercise"] not in ("unknown","drill") or result["session_kind"] not in ("unknown","drill")) or mode == "meaning" and result["exercise"] not in ("unknown","meaning") or mode in ("review","correction") and result["exercise"] not in ("unknown","sentence","definition","audio") or mode in ("review","correction","meaning") and result["session_kind"] == "drill":
+            raise ValueError("Exercise context does not match the practice mode.")
+        if result["stage_before"] is not None and (type(result["stage_before"]) is not int or not 0 <= result["stage_before"] <= 5):
+            raise ValueError("Invalid previous review stage.")
+        stamp = result["due_before"]
+        try:
+            if not isinstance(stamp,str) or stamp and datetime.fromisoformat(stamp).tzinfo is None:
+                raise ValueError()
+            if stamp:
+                result["due_before"] = datetime.fromisoformat(stamp).astimezone(timezone.utc).isoformat()
+        except (ValueError,TypeError):
+            raise ValueError("Invalid previous review date.") from None
+        return result
 
     def complete_drill(self, word_id, data):
         first, last = data.get("first_attempt_id"), data.get("last_attempt_id")
@@ -538,11 +573,13 @@ class Store:
         for word in words:
             word["distractors"] = json.loads(word["distractors"])
             word["audio_urls"] = json.loads(word["audio_urls"])
-        return {"format": "typewriter", "version": 1, "exported": now(), "words": words, "attempts": attempts, "essay": self.essay()}
+        return {"format": "typewriter", "version": 1, "attempt_metadata_version":1, "exported": now(), "words": words, "attempts": attempts, "essay": self.essay()}
 
     def import_backup(self, data):
         if not isinstance(data, dict) or data.get("format") != "typewriter" or data.get("version") != 1:
             raise ValueError("Choose a Typewriter backup file.")
+        if data.get("attempt_metadata_version",1) != 1:
+            raise ValueError("This backup uses a newer practice-context format. Update Typewriter before importing it.")
         words, attempts = data.get("words"), data.get("attempts")
         essay = self.validate_essay(data["essay"]) if "essay" in data else None
         if not isinstance(words, list) or not isinstance(attempts, list) or len(words) > 10000 or len(attempts) > 100000:
@@ -552,6 +589,7 @@ class Store:
         validated = []
         ids = set()
         for w in words:
+            w = dict(w) if isinstance(w,dict) else w
             item = self.validate_word(w)
             old_id = w.get("id")
             if not isinstance(old_id, int) or old_id in ids:
@@ -562,6 +600,7 @@ class Store:
                     parsed = datetime.fromisoformat(w[field])
                     if parsed.tzinfo is None:
                         raise ValueError()
+                    w[field] = parsed.astimezone(timezone.utc).isoformat()
                 except (ValueError, KeyError, TypeError):
                     raise ValueError("Invalid dates in backup.") from None
             if not isinstance(w.get("stage"), int) or not 0 <= w["stage"] <= 5:
@@ -586,9 +625,12 @@ class Store:
                 try:
                     if not isinstance(stamp, str) or stamp and datetime.fromisoformat(stamp).tzinfo is None:
                         raise ValueError()
+                    if stamp:
+                        w[field] = datetime.fromisoformat(stamp).astimezone(timezone.utc).isoformat()
                 except (ValueError, TypeError):
                     raise ValueError("Invalid practice date in backup.") from None
             validated.append((w, item))
+        normalized_attempts = []
         for a in attempts:
             if not isinstance(a, dict) or a.get("word_id") not in ids or a.get("mode") not in ["review", "drill", "correction", "meaning"] or a.get("correct") not in [0, 1] or a.get("hinted") not in [0, 1] or not isinstance(a.get("answer"), str) or len(a["answer"]) > 200 or not isinstance(a.get("elapsed_ms"), int) or not 0 <= a["elapsed_ms"] <= 86400000:
                 raise ValueError("Invalid practice records in backup.")
@@ -597,6 +639,7 @@ class Store:
                     raise ValueError()
             except (ValueError, KeyError, TypeError):
                 raise ValueError("Invalid practice dates.") from None
+            normalized_attempts.append({**a, **self.validate_attempt_metadata(a), "created":datetime.fromisoformat(a["created"]).astimezone(timezone.utc).isoformat()})
         added, id_map, essay_imported = 0, {}, False
         with self.db() as db:
             for original, item in validated:
@@ -613,9 +656,9 @@ class Store:
                 db.execute("UPDATE words SET meaning_flagged=?,distractors=? WHERE id=?", (original.get("meaning_flagged", 0), json.dumps(original.get("distractors", [])), cur.lastrowid))
                 id_map[original["id"]] = cur.lastrowid
                 added += 1
-            for a in attempts:
+            for a in normalized_attempts:
                 if a["word_id"] in id_map:
-                    db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created) VALUES (?,?,?,?,?,?,?)", (id_map[a["word_id"]], a["answer"], a["correct"], a["mode"], a["hinted"], a["elapsed_ms"], a["created"]))
+                    db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created,exercise,session_kind,scheduler,due_before,stage_before) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (id_map[a["word_id"]], a["answer"], a["correct"], a["mode"], a["hinted"], a["elapsed_ms"], a["created"],a["exercise"],a["session_kind"],a["scheduler"],a["due_before"],a["stage_before"]))
             if essay and any(essay[k] for k in ("title","prompt","body")):
                 current = db.execute("SELECT * FROM essay WHERE id=1").fetchone()
                 if not current or not any(current[k] for k in ("title","prompt","body")):

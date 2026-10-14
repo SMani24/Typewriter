@@ -318,6 +318,24 @@ its handling of same-day evidence and separate meaning scheduling first, then
 trial FSRS. Anki and SuperMemo provide useful ideas, but neither their defaults
 nor their outcomes establish which settings are best for your IELTS spelling.
 
+## Recorded practice context
+
+New answers record the exercise (sentence, definition, audio, meaning, or drill),
+normal/selected/endless/drill session context, active scheduler (`legacy`), and
+the server's due date and stage before the answer. Existing outcome, hint, timing,
+and answer fields remain intact. Historical context is explicitly `unknown` when
+it was not recorded; it is not reconstructed from guesses about old sessions.
+
+The database uses schema version 1 for this context upgrade. Backup format 1
+remains supported and exports `attempt_metadata_version: 1`. Older backups receive
+unknown context; unsupported future context formats are rejected before import.
+Date offsets are normalized to UTC without changing their instants. Due eligibility
+and day-boundary promotions compare actual instants/UTC dates, including imported
+dates originally written with another timezone offset.
+
+These changes do not introduce a new ranking formula, change the treatment of
+optional successes, or activate FSRS. Those policy changes remain proposals.
+
 ## Where the implementation lives
 
 - [`typewriter/store.py`](../typewriter/store.py): attempt windows, score,

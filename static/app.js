@@ -145,7 +145,7 @@ function badge(word) {
 }
 function dueWords() {
   const meaningOnly = state.settings.meaning_enabled && !['sentence_enabled','definition_enabled','audio_enabled'].some(k=>state.settings[k]);
-  return state.words.filter(w => (meaningOnly || w.is_due) && exerciseTypes(w).some(type=>meaningOnly ? type === 'meaning' : type !== 'meaning')).sort((a,b) => (b[meaningOnly ? 'meaning_priority' : 'review_priority'] ?? 0) - (a[meaningOnly ? 'meaning_priority' : 'review_priority'] ?? 0) || a.due.localeCompare(b.due));
+  return state.words.filter(w => (meaningOnly || w.is_due) && exerciseTypes(w).some(type=>meaningOnly ? type === 'meaning' : type !== 'meaning')).sort((a,b) => (b[meaningOnly ? 'meaning_priority' : 'review_priority'] ?? 0) - (a[meaningOnly ? 'meaning_priority' : 'review_priority'] ?? 0) || TypewriterReview.compareDue(a,b));
 }
 function stat(label, value, note, symbol) {
   return `<div class="stat"><span class="stat-label">${label}</span><span class="icon-tile">${icon(symbol)}</span><div class="stat-value">${value}</div><span class="stat-note">${note}</span></div>`;
@@ -589,7 +589,7 @@ async function answerSubmit(event) {
     const mode = practice.mode === 'drill' ? 'drill' : practice.correction ? 'correction' : meaning ? 'meaning' : 'review';
     let result;
     try {
-      result = await api(`/words/${word.id}/attempts`,'POST',{answer,mode,version:word.version,hinted:practice.hinted || practice.correction,elapsed_ms:Math.min(86400000,Date.now()-practice.wordStarted)});
+      result = await api(`/words/${word.id}/attempts`,'POST',{answer,mode,version:word.version,exercise:practice.mode === 'drill' ? 'drill' : word.exercise || 'unknown',session_kind:practice.mode === 'drill' ? 'drill' : practice.endless ? 'endless' : practice.scopeIds ? 'selected' : 'normal',hinted:practice.hinted || practice.correction,elapsed_ms:Math.min(86400000,Date.now()-practice.wordStarted)});
     } catch (error) {
       if (practice === session && $('#practice-dialog').open && !$('#practice-active').hidden) practiceFeedback('error','Couldn’t check this answer',`<p>${escapeHtml(error.message || 'Please try again.')}</p>`);
       throw error;

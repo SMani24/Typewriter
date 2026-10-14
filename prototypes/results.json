@@ -1,0 +1,61 @@
+{
+  "scope": "Synthetic code checks only; no production data or learning-outcome claim.",
+  "library": "6.3.2",
+  "schema": 1,
+  "history": [
+    {
+      "day": 0,
+      "correct": true,
+      "hinted": false,
+      "legacy_due": "2026-10-02T09:00:00+00:00",
+      "fsrs_due": "2026-10-01T09:10:00+00:00",
+      "stability": 2.3065
+    },
+    {
+      "day": 1,
+      "correct": true,
+      "hinted": false,
+      "legacy_due": "2026-10-05T09:00:00+00:00",
+      "fsrs_due": "2026-10-09T09:00:00+00:00",
+      "stability": 7.31530074407728
+    },
+    {
+      "day": 4,
+      "correct": false,
+      "hinted": false,
+      "legacy_due": "2026-10-05T09:10:00+00:00",
+      "fsrs_due": "2026-10-05T09:10:00+00:00",
+      "stability": 1.1480449426584476
+    },
+    {
+      "day": 5,
+      "correct": true,
+      "hinted": true,
+      "legacy_due": "2026-10-06T09:10:00+00:00",
+      "fsrs_due": "2026-10-06T09:10:00+00:00",
+      "stability": 0.3392514113089596
+    },
+    {
+      "day": 6,
+      "correct": true,
+      "hinted": false,
+      "legacy_due": "2026-10-08T09:00:00+00:00",
+      "fsrs_due": "2026-10-08T09:00:00+00:00",
+      "stability": 1.141856465452306
+    },
+    {
+      "day": 14,
+      "correct": true,
+      "hinted": false,
+      "legacy_due": "2026-10-18T09:00:00+00:00",
+      "fsrs_due": "2026-10-19T09:00:00+00:00",
+      "stability": 4.4590489758373435
+    }
+  ],
+  "preview": {
+    "legacy_due": 3,
+    "fsrs_due": 3,
+    "active": "legacy"
+  },
+  "snapshot_roundtrip": true
+}

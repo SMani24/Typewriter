@@ -1,8 +1,9 @@
 /* Review rules with injectable randomness for repeatable Node checks. */
 (function (root) {
   'use strict';
+  function compareDue(a,b) {return (Date.parse(a.due) || 0) - (Date.parse(b.due) || 0) || a.id - b.id;}
   function comparePriority(a, b) {
-    return (b.review_priority ?? 0) - (a.review_priority ?? 0) || (a.due || '').localeCompare(b.due || '') || a.id - b.id;
+    return (b.review_priority ?? 0) - (a.review_priority ?? 0) || compareDue(a,b);
   }
   function compareDrillPriority(a, b) {
     return (b.drill_priority ?? b.review_priority ?? 0) - (a.drill_priority ?? a.review_priority ?? 0) || comparePriority(a,b);
@@ -69,7 +70,7 @@
     session.usedQuizIds = session.usedQuizIds.filter(id=>session.quizIds.includes(id));
     return true;
   }
-  const rules = {comparePriority,compareDrillPriority,gap,create,recordSpelling,quizDue,advance,replenish};
+  const rules = {compareDue,comparePriority,compareDrillPriority,gap,create,recordSpelling,quizDue,advance,replenish};
   if (typeof module !== 'undefined' && module.exports) module.exports = rules;
   else root.TypewriterReview = rules;
 })(globalThis);

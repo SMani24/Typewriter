@@ -101,3 +101,8 @@ const drilled={id:1,due:'2026-01-01',review_priority:6,drill_priority:1.5};
 const waiting={id:2,due:'2026-01-02',review_priority:4,drill_priority:4};
 assert.deepEqual([drilled,waiting].sort(rules.compareDrillPriority).map(w=>w.id),[2,1]);
 assert.deepEqual([drilled,waiting].sort(rules.comparePriority).map(w=>w.id),[1,2]);
+// Equal-priority imported dates are ordered by their actual instant, not local text.
+assert.deepEqual([
+  {id:1,review_priority:2,due:'2026-10-14T08:00:00+03:30'},
+  {id:2,review_priority:2,due:'2026-10-14T06:00:00+00:00'}
+].sort(rules.comparePriority).map(w=>w.id),[1,2]);

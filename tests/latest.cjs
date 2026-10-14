@@ -215,6 +215,9 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.locator('#drill-search').fill('mis');
     assert((await page.locator('#drill-options [role="option"]').first().innerText()).startsWith('missing'));
     await page.locator('[data-close="drill-dialog"]').click();
+    const audit=(await api('/export')).attempts;
+    assert(audit.some(a=>a.mode==='review'&&a.exercise==='sentence'&&a.session_kind==='selected'));
+    assert(audit.filter(a=>a.exercise!=='unknown').every(a=>a.scheduler==='legacy'&&a.due_before&&Number.isInteger(a.stage_before)));
     assert.deepEqual(errors,[]);
     console.log('Latest checks passed: unsaved settings, accent fallback, spelling edits during practice, saved volume, keyboard-accessible ranking help, finished-review choices, foreground stale-page errors, and drill priority ordering.');
   } finally {
