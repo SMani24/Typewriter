@@ -24,7 +24,7 @@ class SchedulerAuditTests(unittest.TestCase):
 
     def test_same_utc_day_with_different_local_dates_cannot_promote_twice(self):
         with self.store.db() as db:
-            db.execute("UPDATE words SET stage=1 WHERE id=?",(self.id,))
+            db.execute("UPDATE words SET stage=1,due='2026-10-01T00:00:00+00:00' WHERE id=?",(self.id,))
             db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created) VALUES (?,'example',1,'review',0,0,'2026-10-15T00:30:00+03:30')",(self.id,))
         with patch('typewriter.store.datetime',wraps=datetime) as clock:
             clock.now.return_value=datetime(2026,10,14,23,tzinfo=timezone.utc)
@@ -61,17 +61,17 @@ class SchedulerAuditTests(unittest.TestCase):
         backup=self.store.export();backup['attempt_metadata_version']=99
         with self.assertRaises(ValueError):self.store.import_backup(backup)
 
-    def test_legacy_optional_success_policy_is_characterized_not_changed(self):
-        # This is an approval-gated policy tradeoff in the supplied blueprint.
+    def test_extra_success_keeps_due_and_does_not_inflate_spaced_window(self):
+        # Approved policy: early successes are practice only.
         with patch('typewriter.store.datetime',wraps=datetime) as clock:
             clock.now.return_value=datetime(2026,10,14,7,tzinfo=timezone.utc)
             first=self.store.attempt(self.id,{'answer':'example','session_kind':'normal'})['word']
             clock.now.return_value=datetime(2026,10,14,8,tzinfo=timezone.utc)
             second=self.store.attempt(self.id,{'answer':'example','session_kind':'selected'})['word']
             self.assertEqual(second['stage'],first['stage'])
-            self.assertEqual(datetime.fromisoformat(second['due'])-datetime.fromisoformat(first['due']),timedelta(hours=1))
+            self.assertEqual(second['due'],first['due'])
             for _ in range(8):self.store.attempt(self.id,{'answer':'example','session_kind':'endless'})
-            self.assertEqual(self.store.word(self.id)['recent_accuracy'],100)
+            self.assertEqual(self.store.word(self.id)['spaced_recent_reviews'],0)
 
     def test_capped_priority_does_not_guarantee_coverage(self):
         unseen=self.store.practice_priority({},False,365)

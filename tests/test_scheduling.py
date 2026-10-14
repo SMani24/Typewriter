@@ -15,7 +15,7 @@ class SchedulingTests(unittest.TestCase):
     def attempts(self, word_id, answers, mode='review', hinted=False):
         stamp = datetime.now(timezone.utc).isoformat()
         with self.store.db() as db:
-            db.executemany('INSERT INTO attempts(word_id,answer,correct,mode,hinted,elapsed_ms,created) VALUES (?,?,?,?,?,?,?)', [(word_id,'sample',correct,mode,int(hinted),0,stamp) for correct in answers])
+            db.executemany('INSERT INTO attempts(word_id,answer,correct,mode,hinted,elapsed_ms,created,spaced_recall,evidence_version) VALUES (?,?,?,?,?,?,?,1,1)', [(word_id,'sample',correct,mode,int(hinted),0,stamp) for correct in answers])
 
     def test_recent_struggles_rank_before_new_and_well_remembered_words(self):
         self.attempts(self.weak,[1]*30+[0]*8)

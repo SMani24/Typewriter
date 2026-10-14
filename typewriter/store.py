@@ -110,7 +110,7 @@ class Store:
                 if name not in columns:
                     db.execute(f"ALTER TABLE words ADD COLUMN {name} {definition}")
             columns = {r["name"] for r in db.execute("PRAGMA table_info(attempts)")}
-            for name, definition in {"exercise":"TEXT NOT NULL DEFAULT 'unknown'", "session_kind":"TEXT NOT NULL DEFAULT 'unknown'", "scheduler":"TEXT NOT NULL DEFAULT 'legacy'", "due_before":"TEXT NOT NULL DEFAULT ''", "stage_before":"INTEGER"}.items():
+            for name, definition in {"exercise":"TEXT NOT NULL DEFAULT 'unknown'", "session_kind":"TEXT NOT NULL DEFAULT 'unknown'", "scheduler":"TEXT NOT NULL DEFAULT 'legacy'", "due_before":"TEXT NOT NULL DEFAULT ''", "stage_before":"INTEGER", "spaced_recall":"INTEGER NOT NULL DEFAULT 0", "evidence_version":"INTEGER NOT NULL DEFAULT 0"}.items():
                 if name not in columns:
                     db.execute(f"ALTER TABLE attempts ADD COLUMN {name} {definition}")
             if db.execute("PRAGMA user_version").fetchone()[0] < 1:
@@ -211,7 +211,7 @@ class Store:
                 COUNT(CASE WHEN a.mode='drill' THEN 1 END) AS drills,
                 MAX(a.created) AS last_practised
                 FROM words w LEFT JOIN attempts a ON a.word_id=w.id AND a.created>w.recall_reset_at GROUP BY w.id ORDER BY w.created DESC,w.id DESC""").fetchall()
-            recent = db.execute("""WITH ranked AS (
+            recent_query = """WITH ranked AS (
                 SELECT a.id,word_id,mode,hinted,correct,a.created,
                 ROW_NUMBER() OVER (PARTITION BY word_id,mode,hinted ORDER BY a.id DESC) AS position
                 FROM attempts a JOIN words w ON w.id=a.word_id WHERE mode IN ('review','meaning') AND a.created>w.recall_reset_at
@@ -220,7 +220,12 @@ class Store:
                 MAX(CASE WHEN position=1 THEN id END) AS last_id,
                 MAX(CASE WHEN position=1 THEN correct END) AS last_correct,
                 MAX(CASE WHEN position=1 THEN created END) AS last_created
-                FROM ranked WHERE position<=8 GROUP BY word_id,mode,hinted""").fetchall()
+                FROM ranked WHERE position<=8 GROUP BY word_id,mode,hinted"""
+            recent = db.execute(recent_query).fetchall()
+            spaced_recent = {r["word_id"]:dict(r) for r in db.execute(recent_query.replace("WHERE mode IN ('review','meaning')", "WHERE mode='review' AND a.spaced_recall=1")).fetchall()}
+            latest_reviews = {r["word_id"]:dict(r) for r in db.execute("""SELECT a.word_id,a.correct,a.hinted FROM attempts a
+                JOIN words w ON w.id=a.word_id WHERE a.mode='review' AND a.created>w.recall_reset_at
+                AND a.id=(SELECT MAX(b.id) FROM attempts b WHERE b.word_id=a.word_id AND b.mode='review' AND b.created>w.recall_reset_at)""")}
             results = {(r["word_id"], r["mode"], r["hinted"]): dict(r) for r in recent}
             timestamp = datetime.now(timezone.utc)
             words = []
@@ -243,12 +248,15 @@ class Store:
                 meanings = results.get((w["id"], "meaning", 0), {})
                 w["recent_reviews"] = recall.get("total", 0)
                 w["recent_accuracy"] = round(100 * recall["correct"] / recall["total"]) if recall else None
-                w["needs_help"] = bool(latest and (latest is assisted or not latest["last_correct"]))
+                w["needs_help"] = bool(latest_reviews.get(w["id"]) and (latest_reviews[w["id"]]["hinted"] or not latest_reviews[w["id"]]["correct"]))
                 w["recent_mistakes"] = recall.get("total", 0) - recall.get("correct", 0)
                 w["recall_streak"] = recall["first_miss"] - 1 if recall.get("first_miss") else recall.get("total", 0)
                 w["drill_recommended"] = w["recent_mistakes"] >= 2 and (w["recall_streak"] < 3 or w["needs_help"])
                 overdue = max(0, (timestamp - datetime.fromisoformat(w["due"])).total_seconds() / 86400)
-                w["review_priority"] = self.practice_priority(recall, w["needs_help"], overdue)
+                evidence = spaced_recent.get(w["id"],{})
+                w["spaced_recent_reviews"] = evidence.get("total",0)
+                w["spaced_recent_accuracy"] = round(100*evidence["correct"]/evidence["total"]) if evidence else None
+                w["review_priority"] = self.practice_priority(evidence, w["needs_help"], overdue)
                 completed = datetime.fromisoformat(w["drill_completed_at"]) if w["drill_completed_at"] else None
                 w["drill_cooling"] = bool(completed and 0 <= (timestamp-completed).total_seconds() < 86400)
                 w["drill_cooldown_until"] = (completed+timedelta(days=1)).isoformat() if w["drill_cooling"] else None
@@ -465,29 +473,37 @@ class Store:
                 correct = normalize_answer(answer) == row["word"]
             hinted = data.get("hinted", False)
             recorded_answer = choice["definition"][:200] if mode == "meaning" else answer.strip()
-            attempt_id = db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created,exercise,session_kind,scheduler,due_before,stage_before) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (word_id, recorded_answer, int(correct), mode, int(hinted), elapsed, stamp,metadata["exercise"],metadata["session_kind"],"legacy",row["due"],row["stage"])).lastrowid
-            # Drilling, hints and corrections never move a word into a confident state.
-            # Only one successful promotion per UTC day, even across repeat sessions.
+            at = datetime.fromisoformat(stamp).astimezone(timezone.utc)
+            due = datetime.fromisoformat(row["due"]).astimezone(timezone.utc)
+            actually_due = due <= at
+            known = metadata["session_kind"] in ("normal","selected","endless") and metadata["exercise"] in ("sentence","definition","audio")
+            day = at.date().isoformat()
+            prior_spaced = db.execute("SELECT 1 FROM attempts WHERE word_id=? AND created>? AND spaced_recall=1 AND substr(created,1,10)=?", (word_id,row["recall_reset_at"],day)).fetchone()
+            spaced = mode == "review" and not hinted and actually_due and known and not prior_spaced
+            attempt_id = db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created,exercise,session_kind,scheduler,due_before,stage_before,spaced_recall,evidence_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (word_id, recorded_answer, int(correct), mode, int(hinted), elapsed, stamp,metadata["exercise"],metadata["session_kind"],"legacy",row["due"],row["stage"],int(spaced),1)).lastrowid
             if mode == "review":
                 stage = row["stage"]
                 if correct and not hinted:
-                    last = db.execute("SELECT created FROM attempts WHERE word_id=? AND created>? AND mode='review' AND correct=1 AND hinted=0 ORDER BY id DESC LIMIT 1 OFFSET 1", (word_id,row["recall_reset_at"])).fetchone()
-                    if not last or datetime.fromisoformat(last["created"]).astimezone(timezone.utc).date() != datetime.fromisoformat(stamp).date():
+                    last = db.execute("SELECT created FROM attempts WHERE word_id=? AND id<? AND created>? AND mode='review' AND correct=1 AND hinted=0 ORDER BY id DESC LIMIT 1", (word_id,attempt_id,row["recall_reset_at"])).fetchone()
+                    same_day = last and datetime.fromisoformat(last["created"]).astimezone(timezone.utc).date() == at.date()
+                    # Extra successes are saved as practice, without moving Legacy dates.
+                    if actually_due and not same_day:
                         stage = min(stage + 1, 5)
-                    interval = [1, 1, 3, 7, 14, 30][stage]
+                        due = at + timedelta(days=[1,1,3,7,14,30][stage])
+                        db.execute("UPDATE words SET stage=?,due=? WHERE id=?", (stage,due.isoformat(),word_id))
                 else:
-                    stage = max(0, stage - 1)
-                    interval = 0
-                    db.execute("UPDATE words SET drill_completed_at='' WHERE id=?", (word_id,))
-                due = (datetime.now(timezone.utc) + (timedelta(days=interval) if interval else timedelta(minutes=10))).isoformat()
-                db.execute("UPDATE words SET stage=?,due=? WHERE id=?", (stage, due, word_id))
+                    stage = max(0,stage-1)
+                    due = at + timedelta(minutes=10)
+                    db.execute("UPDATE words SET stage=?,due=?,drill_completed_at='' WHERE id=?", (stage,due.isoformat(),word_id))
         return {"attempt_id": attempt_id, "correct": correct, "expected": row["definition"] if mode == "meaning" else row["word"], "answer": answer.strip(), "tip": row["tip"], "word": self.word(word_id)}
 
     @staticmethod
     def validate_attempt_metadata(data):
-        result = {"exercise":data.get("exercise","unknown"), "session_kind":data.get("session_kind","unknown"), "scheduler":data.get("scheduler","legacy"), "due_before":data.get("due_before",""), "stage_before":data.get("stage_before")}
+        result = {"exercise":data.get("exercise","unknown"), "session_kind":data.get("session_kind","unknown"), "scheduler":data.get("scheduler","legacy"), "due_before":data.get("due_before",""), "stage_before":data.get("stage_before"), "spaced_recall":data.get("spaced_recall",0), "evidence_version":data.get("evidence_version",0)}
         if result["exercise"] not in ("unknown","sentence","definition","audio","meaning","drill") or result["session_kind"] not in ("unknown","normal","selected","endless","drill") or result["scheduler"] != "legacy":
             raise ValueError("Invalid practice context.")
+        if type(result["spaced_recall"]) is not int or result["spaced_recall"] not in (0,1) or type(result["evidence_version"]) is not int or result["evidence_version"] not in (0,1) or result["spaced_recall"] and (result["evidence_version"] != 1 or data.get("mode") != "review" or data.get("hinted",False)):
+            raise ValueError("Invalid spaced recall evidence.")
         mode = data.get("mode")
         if mode == "drill" and (result["exercise"] not in ("unknown","drill") or result["session_kind"] not in ("unknown","drill")) or mode == "meaning" and result["exercise"] not in ("unknown","meaning") or mode in ("review","correction") and result["exercise"] not in ("unknown","sentence","definition","audio") or mode in ("review","correction","meaning") and result["session_kind"] == "drill":
             raise ValueError("Exercise context does not match the practice mode.")
@@ -530,7 +546,8 @@ class Store:
             history = [dict(r) for r in db.execute("SELECT substr(created,1,10) AS day, COUNT(*) AS total, SUM(correct) AS correct FROM attempts WHERE mode='review' AND hinted=0 GROUP BY day ORDER BY day DESC LIMIT 30")]
             mistakes = [dict(r) for r in db.execute("SELECT w.word,a.answer,COUNT(*) AS count FROM attempts a JOIN words w ON w.id=a.word_id WHERE a.correct=0 AND a.mode!='meaning' GROUP BY w.word,a.answer ORDER BY count DESC LIMIT 8")]
             totals = dict(db.execute("SELECT COUNT(CASE WHEN mode='review' AND hinted=0 THEN 1 END) AS reviews, COUNT(CASE WHEN mode='review' AND hinted=0 AND correct=1 THEN 1 END) AS correct, COUNT(CASE WHEN mode='drill' THEN 1 END) AS drills, COUNT(CASE WHEN mode='meaning' THEN 1 END) AS meanings, COUNT(CASE WHEN mode='meaning' AND correct=1 THEN 1 END) AS meanings_correct FROM attempts").fetchone())
-        return {"history": history, "mistakes": mistakes, **totals}
+            spaced = dict(db.execute("SELECT COUNT(*) AS spaced_reviews,COALESCE(SUM(correct),0) AS spaced_correct,MIN(created) AS spaced_since FROM attempts WHERE spaced_recall=1").fetchone())
+        return {"history": history, "mistakes": mistakes, **totals, **spaced}
 
     def essay(self):
         with self.db() as db:
@@ -658,7 +675,7 @@ class Store:
                 added += 1
             for a in normalized_attempts:
                 if a["word_id"] in id_map:
-                    db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created,exercise,session_kind,scheduler,due_before,stage_before) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (id_map[a["word_id"]], a["answer"], a["correct"], a["mode"], a["hinted"], a["elapsed_ms"], a["created"],a["exercise"],a["session_kind"],a["scheduler"],a["due_before"],a["stage_before"]))
+                    db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created,exercise,session_kind,scheduler,due_before,stage_before,spaced_recall,evidence_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (id_map[a["word_id"]], a["answer"], a["correct"], a["mode"], a["hinted"], a["elapsed_ms"], a["created"],a["exercise"],a["session_kind"],a["scheduler"],a["due_before"],a["stage_before"],a["spaced_recall"],a["evidence_version"]))
             if essay and any(essay[k] for k in ("title","prompt","body")):
                 current = db.execute("SELECT * FROM essay WHERE id=1").fetchone()
                 if not current or not any(current[k] for k in ("title","prompt","body")):
