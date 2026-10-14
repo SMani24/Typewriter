@@ -82,6 +82,8 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     assert((await page.locator('#essay-highlight-content mark').allTextContents()).includes('accomodation'));
     assert.equal(await page.locator('#essay-highlight-content script').count(),0);
     assert.equal(await page.locator('#essay-body').inputValue(),text);
+    const underline=await page.locator('#essay-highlight-content mark').first().evaluate(mark=>{const style=getComputedStyle(mark);return {offset:style.textUnderlineOffset,thickness:parseFloat(style.textDecorationThickness),skip:style.textDecorationSkipInk};});
+    assert(parseFloat(underline.offset)>=6);assert(underline.thickness>=1.8);assert.equal(underline.skip,'none');
     if(process.env.TYPEWRITER_SCREENSHOTS) {
       fs.mkdirSync(process.env.TYPEWRITER_SCREENSHOTS,{recursive:true});
       await page.locator('.essay-paper').screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'essay-spelling.png')});
