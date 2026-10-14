@@ -18,7 +18,7 @@ DEFAULTS = {
     "sentence_enabled": True, "definition_enabled": True, "audio_enabled": True,
     "meaning_enabled": True, "preparation_method": "api", "offline_batch_size": 20,
     "quiz_interval_mode": "fixed", "quiz_interval_min": 5, "quiz_interval_max": 5,
-    "review_session_size": 10, "audio_volume": 100,
+    "review_session_size": 10, "audio_volume": 100, "text_size": "default",
     "pronunciation_accent": "uk",
     "autoplay_sentence": False, "autoplay_definition": False, "autoplay_audio": True,
     "autoplay_meaning": False, "autoplay_drill": False, "autoplay_correction": False,
@@ -139,6 +139,8 @@ class Store:
             raise ValueError("Choose at least one review exercise, or turn off review sessions.")
         if values["preparation_method"] not in ("api", "offline", "manual"):
             raise ValueError("Choose Gemini API, another LLM, or manual preparation.")
+        if values["text_size"] not in ("small", "default", "large", "extra-large"):
+            raise ValueError("Choose one of the four text sizes.")
         if values["pronunciation_accent"] not in ("uk", "us"):
             raise ValueError("Choose UK or US pronunciation.")
         if values["quiz_interval_mode"] not in ("fixed", "range"):

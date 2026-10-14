@@ -78,3 +78,10 @@ class LatestTests(unittest.TestCase):
             self.assertEqual(saved[key], value)
             with self.assertRaises(ValueError):
                 self.store.save_settings({key: "false"})
+
+    def test_text_sizes_persist_and_reject_unsupported_values(self):
+        for size in ['small', 'default', 'large', 'extra-large']:
+            self.store.save_settings({'text_size': size})
+            self.assertEqual(Store(self.store.path).settings()['text_size'], size)
+        with self.assertRaises(ValueError):
+            self.store.save_settings({'text_size': 'huge'})

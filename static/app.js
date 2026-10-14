@@ -167,7 +167,7 @@ function render() {
   renderKeys();
   renderPracticeModes();
   renderDrillSuggestions();
-  if (currentPage !== 'settings') {$$('audio').forEach(audio=>audio.volume = (state.settings.audio_volume ?? 100) / 100);}
+  if (currentPage !== 'settings') {applyTextSize(state.settings.text_size);$$('audio').forEach(audio=>audio.volume = (state.settings.audio_volume ?? 100) / 100);}
 }
 function renderDrillSuggestions() {
   const words = state.words.filter(w=>w.drill_recommended).sort(TypewriterReview.compareDrillPriority).slice(0,3);
@@ -223,9 +223,14 @@ function fillSettings() {
   form.elements.clear_proxy_password.checked = false;
   form.elements.auto_ai.disabled = state.settings.preparation_method !== 'api';
   form.elements.quiz_interval_fixed.value = state.settings.quiz_interval_min;
-  updateQuizRhythm();updateVolume();
+  updateQuizRhythm();updateVolume();applyTextSize(form.elements.text_size.value);
   $('#proxy-password-note').textContent = state.settings.proxy_password_set ? 'saved locally' : 'optional';
   settingsBaseline = JSON.stringify(settingsPayload());updateSettingsDirty();
+}
+function applyTextSize(size) {
+  const scales = {small:0.9,default:1,large:1.15,'extra-large':1.3};
+  document.documentElement.style.setProperty('--text-scale',scales[size] ?? 1);
+  document.documentElement.dataset.textSize = size;
 }
 function updateVolume() {
   const value = Number($('#audio-volume').value);
@@ -270,7 +275,7 @@ function renderKeys() {
 function settingsPayload() {
   const form = $('#settings-form'), result = {};
   ['proxy_enabled','auto_ai','review_enabled','drill_enabled','sentence_enabled','definition_enabled','audio_enabled','meaning_enabled','autoplay_sentence','autoplay_definition','autoplay_audio','autoplay_meaning','autoplay_drill','autoplay_correction','clear_proxy_password'].forEach(k => result[k] = form.elements[k].checked);
-  ['proxy_type','proxy_host','proxy_username','proxy_password','model','preparation_method','pronunciation_accent'].forEach(k => result[k] = form.elements[k].value.trim());
+  ['proxy_type','proxy_host','proxy_username','proxy_password','model','preparation_method','pronunciation_accent','text_size'].forEach(k => result[k] = form.elements[k].value.trim());
   ['proxy_port','batch_size','daily_budget','requests_per_minute','offline_batch_size','review_session_size','audio_volume'].forEach(k => result[k] = Number(form.elements[k].value));
   result.quiz_interval_mode = form.elements.quiz_interval_mode.value;
   result.quiz_interval_min = Number(form.elements[result.quiz_interval_mode === 'fixed' ? 'quiz_interval_fixed' : 'quiz_interval_min'].value);
@@ -1071,6 +1076,7 @@ $('#practice-show').addEventListener('change',event => {if (practice) {practice.
 $('#settings-form').elements.preparation_method.addEventListener('change',event => {$('#settings-form').elements.auto_ai.disabled = event.target.value !== 'api';});
 $('#settings-form').addEventListener('submit',event => {event.preventDefault();guarded(async () => {await saveSettings();await refresh();toast('Settings saved.');},$('#settings-form button[type=submit]'));});
 $('#audio-volume').addEventListener('input',updateVolume);
+$('#settings-form').elements.text_size.addEventListener('change',event=>applyTextSize(event.target.value));
 $('#settings-form').addEventListener('input',updateSettingsDirty);
 $('#settings-form').addEventListener('change',updateSettingsDirty);
 window.addEventListener('beforeunload',event=>{if(settingsDirty()){event.preventDefault();event.returnValue='';}});

@@ -42,6 +42,9 @@ Remove `~/.local/share/applications/typewriter.desktop` to remove the menu entry
 
 ## Your notebook
 
+Choose Small, Default, Large, or Extra large in **Settings → Reading & appearance**.
+The text size previews immediately; save to keep it or discard to restore your size.
+
 - Add individual words with manual clues, or paste a list of words.
 - Look up meanings, exact-word examples, and UK/US audio in Cambridge Dictionary.
 - Ask Gemini to fill missing meanings, sentences, and spelling tips in batches.
