@@ -1,6 +1,6 @@
 {
   "name": "typewriter-browser-checks",
   "private": true,
-  "scripts": {"test": "node tests/review.cjs && node tests/browser.cjs && node tests/updates.cjs && node tests/latest.cjs && node tests/preferences.cjs && node tests/drills.cjs && node tests/text-sizes.cjs && node tests/essay.cjs && node tests/sidebar.cjs"},
+  "scripts": {"test": "node tests/review.cjs && node tests/browser.cjs && node tests/updates.cjs && node tests/latest.cjs && node tests/preferences.cjs && node tests/drills.cjs && node tests/text-sizes.cjs && node tests/essay.cjs && node tests/sidebar.cjs && node tests/schedulers.cjs"},
   "devDependencies": {"playwright": "^1.58.2"}
 }

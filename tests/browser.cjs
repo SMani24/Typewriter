@@ -64,6 +64,8 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
       await page.screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'today.png'),fullPage:true,animations:'disabled'});
     }
     await page.getByRole('button',{name:'Start my review',exact:true}).click();
+    await page.waitForSelector('#practice-dialog[open]');
+    await page.waitForSelector('#practice-active:not([hidden])');
     await page.getByRole('button',{name:'Listen · Alt+P',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('#pronunciation').currentTime>0);
     assert((await page.locator('#pronunciation').getAttribute('src')).startsWith('/api/words/'));
@@ -123,6 +125,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.locator('#drill-search').press('Enter');
     await page.locator('#drill-target').selectOption('10');
     await page.getByRole('button',{name:'Begin drill',exact:true}).click();
+    await page.waitForSelector('#practice-dialog[open]');
     for(let n=0;n<10;n++) {
       await page.waitForFunction(()=>!document.querySelector('#answer').disabled);
       await page.locator('#answer').fill('necessary');
@@ -203,6 +206,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.locator('#drill-search').fill('necessary');
     await page.locator('#drill-search').press('Enter');
     await page.getByRole('button',{name:'Begin drill',exact:true}).click();
+    await page.waitForSelector('#practice-dialog[open]');
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.getByRole('button',{name:'End session',exact:true}).click();
     await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
@@ -236,6 +240,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
       await page.locator('#word-search').fill(word);
       await page.getByRole('checkbox',{name:`Select ${word}`,exact:true}).check();
       await page.getByRole('button',{name:'Review selected',exact:true}).click();
+      await page.waitForFunction(()=>!document.querySelector('[data-action="review-selected"]').disabled);
     }
     async function notebook() {return page.evaluate(async()=> (await fetch('/api/state')).json());}
     await preferences({preparation_method:'offline'});
@@ -256,6 +261,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await preferences({sentence_enabled:false,definition_enabled:false,meaning_enabled:false,audio_enabled:true});
     await selectReview('necessary');
     await page.waitForFunction(()=>document.querySelector('#pronunciation').currentTime>0);
+    await page.waitForFunction(expected=>document.querySelector('#practice-mode').textContent===expected && !document.querySelector('#answer').disabled,'AUDIO-ONLY SPELLING');
     assert.equal(await page.locator('#practice-mode').innerText(),'AUDIO-ONLY SPELLING');
     assert.equal(await page.locator('#practice-word').innerText(),'');
     assert.equal(await page.locator('#practice-meaning').innerText(),'');
@@ -276,6 +282,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
 
     await preferences({sentence_enabled:false,definition_enabled:true,meaning_enabled:false,audio_enabled:false});
     await selectReview('necessary');
+    await page.waitForFunction(expected=>document.querySelector('#practice-mode').textContent===expected && !document.querySelector('#answer').disabled,'SPELLING FROM A MEANING');
     assert.equal(await page.locator('#practice-mode').innerText(),'SPELLING FROM A MEANING');
     assert((await page.locator('#practice-clue').innerText()).includes('Needed for a particular purpose'));
     assert(await page.locator('#pronunciation').evaluate(a=>!a.hasAttribute('src')));
@@ -284,6 +291,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await preferences({sentence_enabled:false,definition_enabled:false,meaning_enabled:true,audio_enabled:false});
     const beforeMeaning=await notebook();
     await selectReview('necessary');
+    await page.waitForFunction(expected=>document.querySelector('#practice-mode').textContent===expected && !document.querySelector('#answer').disabled,'MEANING QUIZ');
     assert.equal(await page.locator('#practice-mode').innerText(),'MEANING QUIZ');
     if(process.env.TYPEWRITER_SCREENSHOTS) await page.screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'meaning-quiz.png'),animations:'disabled'});
     assert.equal(await page.locator('.meaning-choice').count(),4);
@@ -302,6 +310,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
 
     await preferences({sentence_enabled:true,definition_enabled:false,meaning_enabled:false,audio_enabled:false});
     await selectReview('environment');
+    await page.waitForFunction(expected=>document.querySelector('#practice-mode').textContent===expected && !document.querySelector('#answer').disabled,'SENTENCE SPELLING');
     assert.equal(await page.locator('#practice-mode').innerText(),'SENTENCE SPELLING');
     assert((await page.locator('#practice-clue').innerText()).includes('________'));
     assert.equal(await page.locator('#practice-meaning').innerText(),'');
@@ -408,8 +417,11 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     const beforeMixed=await notebook();
     await page.locator('.nav-item[data-page="today"]').click();
     await page.getByRole('button',{name:'Start my review',exact:true}).click();
+    await page.waitForSelector('#practice-dialog[open]');
+    await page.waitForSelector('#practice-active:not([hidden])');
     for(let group=0;group<2;group++) {
       for(let i=0;i<5;i++) {
+        await page.waitForFunction(expected=>document.querySelector('#practice-mode').textContent===expected && !document.querySelector('#answer').disabled,'SENTENCE SPELLING');
         assert.equal(await page.locator('#practice-mode').innerText(),'SENTENCE SPELLING');
         const clue=await page.locator('#practice-clue').innerText();
         const word=beforeMixed.words.find(w=>w.clue===clue);
@@ -467,6 +479,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     assert.equal(await page.locator('input[name="review_session_size"]').inputValue(),'2');
     await page.locator('.nav-item[data-page="today"]').click();
     await page.getByRole('button',{name:'Start my review',exact:true}).click();
+    await page.waitForSelector('#practice-dialog[open]');
+    await page.waitForSelector('#practice-active:not([hidden])');
     assert((await page.locator('#practice-count').innerText()).endsWith('OF 2'));
     await page.keyboard.press('Escape');
     await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
@@ -476,6 +490,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     const beforeEndless=await notebook();
     await page.locator('.nav-item[data-page="today"]').click();
     await page.getByRole('button',{name:'Practise endlessly',exact:false}).click();
+    await page.waitForSelector('#practice-dialog[open]');
+    await page.waitForSelector('#practice-active:not([hidden])');
     assert(await page.locator('.practice-meter').isHidden());
     let endlessSpellings=0, endlessQuizzes=[];
     while(endlessSpellings<16) {
@@ -516,6 +532,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     await page.locator('#word-search').fill('necessary');
     await page.getByRole('checkbox',{name:'Select necessary',exact:true}).check();
     await page.getByRole('button',{name:'Endless review',exact:false}).click();
+    await page.waitForSelector('#practice-dialog[open]');
+    await page.waitForSelector('#practice-active:not([hidden])');
     const beforeSingle=await notebook();
     for(let i=0;i<3;i++) {
       assert.equal(await page.locator('#practice-clue').innerText(),correctedWord.clue);
@@ -546,6 +564,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     await page.locator('#word-search').fill('necessary');
     await page.getByRole('checkbox',{name:'Select necessary',exact:true}).check();
     await page.getByRole('button',{name:'Endless review',exact:false}).click();
+    await page.waitForSelector('#practice-dialog[open]');
+    await page.waitForSelector('#practice-active:not([hidden])');
     for(let i=0;i<3;i++) {
       const index=await page.locator('.meaning-choice').evaluateAll((options,meaning)=>options.findIndex(b=>b.textContent.includes(meaning)),correctedWord.definition);
       await page.keyboard.press(String(index+1));

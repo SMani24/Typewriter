@@ -2,8 +2,9 @@
 
 This optional, deterministic experiment uses synthetic review histories. It never
 opens the production notebook, changes the app's scheduler, or exposes an FSRS
-switch. Its shadow-state and evidence-selection rules are candidate policies,
-not shipped learning behavior or proof of improved recall.
+switch. The production spelling integration is described in the [ranking guide](../docs/review-ranking.md).
+Independent meaning cards remain a candidate policy in this lab. Synthetic checks
+are not proof of improved recall.
 
 Use a separate environment:
 
@@ -18,7 +19,7 @@ The lab pins Py-FSRS 6.3.2, keeps default retention/parameters and disables fuzz
 for repeatable checks. It exercises independent spelling/meaning cards, rating
 mapping, saved states, elapsed-time previews, explicit switching confirmation,
 active-session rejection, spelling resets, and snapshot restoration. Legacy
-comparison retains the current fixed stages, including its optional-review rules.
+comparison follows the approved fixed stages and due-only success policy.
 No optimizer or production migration runs here.
 
 The model-library API and release are documented by

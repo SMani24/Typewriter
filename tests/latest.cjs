@@ -63,6 +63,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
       if(await page.locator('#selection-bar').isVisible()) await page.locator('[data-action="clear-selection"]').click();
       await page.getByRole('checkbox',{name:'Select '+word,exact:true}).check();
       await page.locator('[data-action="review-selected"]').click();
+      await page.waitForSelector('#practice-dialog[open]');
     }
     async function end() {await page.keyboard.press('Escape');await page.locator('[data-action="close-practice"]').click();}
     await page.locator('.nav-item[data-page="settings"]').click();
@@ -133,7 +134,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.locator('.nav-item[data-page="settings"]').click();
     await page.locator('#review-ranking-help summary').focus();await page.keyboard.press('Enter');
     assert(await page.locator('#review-ranking-help').evaluate(d=>d.open));
-    assert((await page.locator('#review-ranking-help').innerText()).includes('last eight unaided spelling reviews'));
+    assert((await page.locator('#review-ranking-help').innerText()).includes('last eight spaced spelling recalls'));
     await page.locator('#review-ranking-help').scrollIntoViewIfNeeded();await screenshot('settings-ranking');
     await page.locator('.nav-item[data-page="today"]').click();
     // Clear due spelling reviews through genuine answers, then choose the next session explicitly.
@@ -151,6 +152,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.setViewportSize({width:1360,height:1050});
     await page.locator('[data-action="review-complete-quizzes"]').click();
     await page.waitForSelector('#practice-dialog[open]');
+    await page.waitForFunction(expected=>document.querySelector('#practice-mode').textContent===expected && !document.querySelector('#answer').disabled,'MEANING QUIZ');
     assert.equal(await page.locator('#practice-mode').innerText(),'MEANING QUIZ');
     await end();
     await page.locator('[data-action="review"]').click();

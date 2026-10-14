@@ -47,11 +47,17 @@ def engine(db):
     return json.loads(row['value']) if row else 'legacy'
 
 
+def audio_eligible(word, settings):
+    accent=word['pronunciation_accent'] or settings['pronunciation_accent']
+    recording=word['audio_urls'].get(accent) if word['audio_urls'] else word['audio_url'] if accent=='uk' else ''
+    return bool(word['audio_verified'] and not word['audio_flagged'] and (word['audio_file'] or recording))
+
+
 def spelling_types(word, settings):
     return [name for name, ready in (
         ('sentence', bool(word['clue'])),
         ('definition', bool(word['definition'] and not word['meaning_flagged'])),
-        ('audio', bool(word['audio_eligible']))) if ready and settings[name+'_enabled']]
+        ('audio', audio_eligible(word,settings))) if ready and settings[name+'_enabled']]
 
 
 def order_key(word, selected):

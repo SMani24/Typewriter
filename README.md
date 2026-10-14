@@ -5,7 +5,7 @@ Runs locally in your browser; your words and progress live in SQLite on your com
 
 Add words from your writing, practise a difficult spelling repeatedly, and come back
 for short reviews. Drill repetitions, hints, and correction attempts are kept separate
-from unaided recall. Words become confident after successful reviews across different days.
+from unaided recall. Legacy stages grow through due reviews across different UTC days; FSRS is an optional adaptive scheduler.
 
 ![Typewriter’s daily practice screen](docs/preview.png)
 
@@ -67,14 +67,24 @@ material it needs. Audio-only exercises show no sentence or definition. Meaning 
 ask you to choose a definition (click or press **1–4** to answer immediately) and have separate scores;
 they do not advance spelling stages. Repeated word drills remain a separate session.
 
-Due spelling words are ordered by recent performance: the last eight unaided reviews,
-the latest mistake or use of a hint, and how overdue the word is. New words receive a
-middle priority; long-overdue words gradually catch up. Correct unaided reviews move
-through 1, 3, 7, 14, and 30-day intervals, with at most one promotion per day. A mistake
-or hint brings the word back after ten minutes. Selecting words allows an earlier review.
-Quiz questions use their own meaning results to choose words, separately from spelling.
-The [ranking guide](docs/review-ranking.md) explains eligibility, the exact score, due
-dates, worked examples, limitations, and possible alternatives.
+**Legacy** remains the default spelling scheduler. Its priority uses the last eight
+spaced recalls, the latest struggle, and time overdue. A spaced recall is the first
+due, unaided answer per word per UTC day since the upgrade; lifetime totals still
+include older history and extra practice. Due successes advance through 1, 3, 7, 14,
+and 30-day stages at most once per UTC day. Extra successes keep the date unchanged;
+misses or hints return in ten minutes. Every fifth displayed normal spelling question
+uses the oldest due eligible word, carrying credit across short sessions.
+
+For adaptive dates, open **Settings → Spelling scheduler → Preview switching to FSRS**.
+Compare due counts and example dates, then confirm. FSRS uses due spelling answers
+with a 90% retention target and short learning steps. Both engines keep separate
+progress, so you can return to Legacy after ending a session. Older answers are kept
+as history rather than replayed into FSRS. Drills, corrections, early practice, and
+meaning quizzes do not train its spelling memory.
+
+The [ranking guide](docs/review-ranking.md) explains selection, evidence, switching,
+backup compatibility, and limitations. Meaning quizzes keep their separate ranking
+and rhythm in both engines.
 
 Words with at least two misses in their last eight unaided spelling reviews appear
 as **Worth a drill** on Today and in the notebook and word picker. Three consecutive
@@ -258,7 +268,10 @@ Your notebook, settings, request counters, preparation results, the latest 500 l
 and cached audio are in **`data/`**. Logs live in SQLite alongside the notebook.
 API keys, proxy credentials, backups, and personal data are excluded from Git.
 Backups contain words, attempts, pronunciation and meaning flags, and generated quiz
-options, but no keys or connection settings.
+options, both spelling schedules, the active scheduler, and the essay draft, but no keys
+or connection settings. Format-1 backups remain importable; a full format-2 restore into
+an empty notebook restores the scheduler choice. Merges keep the existing choice.
+Upgrades create a physical database backup before migrating older notebooks.
 Uploaded recordings are not embedded in JSON backups. Copy the entire `data/` directory
 when moving your notebook and its recordings together.
 Imported Cambridge recordings need checking again before audio-only practice.

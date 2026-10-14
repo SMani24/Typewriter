@@ -71,6 +71,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
       if(await page.locator('#selection-bar').isVisible()) await page.locator('[data-action="clear-selection"]').click();
       await page.getByRole('checkbox',{name:'Select '+word,exact:true}).check();
       await page.locator('[data-action="review-selected"]').click();
+      await page.waitForSelector('#practice-dialog[open]');
     }
     async function end() {await page.keyboard.press('Escape');await page.locator('[data-action="close-practice"]').click();}
     const tasks=['sentence','definition','audio','meaning','drill','correction'];

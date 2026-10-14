@@ -247,3 +247,34 @@ class EngineTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.answer(s)
         with self.store.db() as db:db.execute('UPDATE practice_sessions SET config=? WHERE id=?',('foreign-config',s['id']))
         with self.assertRaises(ValueError):self.answer(s)
+
+    def test_fsrs_same_day_due_steps_update_memory_without_inflating_daily_evidence(self):
+        self.switch('fsrs');s=self.session();self.answer(s);self.store.session_touch(s['id'],end=True)
+        first=self.states()[0]['card'];legacy=self.store.export()['words'][0]
+        future=utc(first['due'])+timedelta(seconds=1)
+        with patch('typewriter.store.datetime',wraps=datetime) as store_clock, patch('typewriter.scheduling.datetime',wraps=datetime) as scheduler_clock:
+            store_clock.now.return_value=future;scheduler_clock.now.return_value=future
+            s=self.session();self.answer(s);self.store.session_touch(s['id'],end=True)
+        self.assertEqual(self.states()[0]['card']['state'],2)
+        self.assertEqual(self.store.export()['words'][0]['due'],legacy['due'])
+        self.assertEqual([a['fsrs_rating'] for a in self.store.export()['attempts']],[3,3])
+        self.assertEqual(self.store.progress()['spaced_reviews'],1)
+
+    def test_preview_rejects_newly_due_card_without_any_database_change(self):
+        at=datetime.now(timezone.utc)
+        with self.store.db() as db:
+            word=self.store.word(self.ids[0]);card=card_for(db,word);card.due=at+timedelta(minutes=1);save_card(db,card)
+        preview=self.store.scheduler_preview('fsrs')
+        with patch('typewriter.scheduling.datetime',wraps=datetime) as clock:
+            clock.now.return_value=at+timedelta(minutes=2)
+            with self.assertRaises(ValueError):self.store.scheduler_switch({'target':'fsrs','token':preview['token']})
+
+    def test_audio_material_uses_session_accent_when_other_tab_changes_default(self):
+        self.store.set_pronunciation(self.ids[0],'',{'uk':'https://dictionary.cambridge.org/example.mp3'})
+        self.store.set_audio(self.ids[0],verified=True)
+        self.store.save_settings({'sentence_enabled':False,'definition_enabled':False,'audio_enabled':True})
+        self.switch('fsrs');s=self.session()
+        self.store.save_settings({'pronunciation_accent':'us'})
+        self.assertFalse(self.store.word(self.ids[0])['audio_eligible'])
+        self.answer(s,exercise='audio')
+        self.assertEqual(self.store.export()['attempts'][-1]['fsrs_rating'],3)

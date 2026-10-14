@@ -198,6 +198,9 @@ class Store(SchedulingStore):
             if not isinstance(values[key], str) or len(values[key]) > 200:
                 raise ValueError("Proxy credentials must be shorter than 200 characters.")
         with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            # An unrelated save must never undo a concurrent confirmed engine switch.
+            values["scheduler"]=engine(db)
             db.executemany("INSERT OR REPLACE INTO settings VALUES (?,?)", [(k, json.dumps(v)) for k, v in values.items()])
         return self.settings()
 

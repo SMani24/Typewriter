@@ -3,6 +3,10 @@
   'use strict';
   function compareDue(a,b) {return (Date.parse(a.due) || 0) - (Date.parse(b.due) || 0) || a.id - b.id;}
   function comparePriority(a, b) {
+    if (a.scheduler==='fsrs' && b.scheduler==='fsrs') {
+      const aNew=a.retrievability==null, bNew=b.retrievability==null;
+      return Number(bNew)-Number(aNew) || (a.retrievability ?? 0)-(b.retrievability ?? 0) || compareDue(a,b);
+    }
     return (b.review_priority ?? 0) - (a.review_priority ?? 0) || compareDue(a,b);
   }
   function compareDrillPriority(a, b) {

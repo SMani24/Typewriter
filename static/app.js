@@ -32,7 +32,7 @@ document.addEventListener('focusin',event=>{
   const modal = event.target.closest('dialog[open]');
   if (modal) focusedModal = modal;
 });
-let settingsBaseline = null, pendingSettingsPage = null;
+let settingsBaseline = null, pendingSettingsPage = null, schedulerPreview = null, sessionStarting = false, sessionHeartbeat = null, lastSessionEnd = Promise.resolve(), lastEndingSession = null;
 let pronunciationNotices = [], pronunciationChecking = false;
 let preparationPreviewVersion = 0, preparationPreviewTimer, preparationPreviewController = null, preparationApplying = false, stalePreparationIds = [];
 const preparationPending = word => word.status !== 'ready' || !!word.meaning_flagged;
@@ -145,7 +145,7 @@ function badge(word) {
 }
 function dueWords() {
   const meaningOnly = state.settings.meaning_enabled && !['sentence_enabled','definition_enabled','audio_enabled'].some(k=>state.settings[k]);
-  return state.words.filter(w => (meaningOnly || w.is_due) && exerciseTypes(w).some(type=>meaningOnly ? type === 'meaning' : type !== 'meaning')).sort((a,b) => (b[meaningOnly ? 'meaning_priority' : 'review_priority'] ?? 0) - (a[meaningOnly ? 'meaning_priority' : 'review_priority'] ?? 0) || TypewriterReview.compareDue(a,b));
+  return state.words.filter(w => (meaningOnly || w.is_due) && exerciseTypes(w).some(type=>meaningOnly ? type === 'meaning' : type !== 'meaning')).sort((a,b) => meaningOnly ? (b.meaning_priority ?? 0)-(a.meaning_priority ?? 0) || TypewriterReview.compareDue(a,b) : TypewriterReview.comparePriority(a,b));
 }
 function stat(label, value, note, symbol) {
   return `<div class="stat"><span class="stat-label">${label}</span><span class="icon-tile">${icon(symbol)}</span><div class="stat-value">${value}</div><span class="stat-note">${note}</span></div>`;
@@ -156,9 +156,9 @@ function empty(title, description, action = '', label = '') {
 function render() {
   const due = dueWords(), progress = state.progress;
   const accuracy = progress.reviews ? Math.round(100 * progress.correct / progress.reviews) + '%' : '—';
-  const confident = state.words.filter(w => w.state === 'Confident').length;
+  const confident = state.words.filter(w => ['Confident','Reviewing'].includes(w.state)).length;
   $('#nav-due').textContent = due.length;
-  $('#today-stats').innerHTML = stat('Words ready for review', due.length, due.length ? 'A fresh chance to remember' : 'A little breathing room', 'sun') + stat('Your recall accuracy', accuracy, progress.reviews ? 'Across unaided reviews' : 'Your first review starts here', 'chart') + stat('Words growing familiar', confident, `Out of ${state.words.length} words in your notebook`, 'leaf');
+  $('#today-stats').innerHTML = stat('Words ready for review', due.length, due.length ? 'A fresh chance to remember' : 'A little breathing room', 'sun') + stat('Unaided answer accuracy', accuracy, progress.reviews ? 'Lifetime, including extra practice' : 'Your first review starts here', 'chart') + stat('Words growing familiar', confident, `Out of ${state.words.length} words in your notebook`, 'leaf');
   $('#hero-note').textContent = due.length ? `Up to ${Math.min(due.length,state.settings.review_session_size ?? 10)} words · Or keep going endlessly` : 'No due spelling words · Endless review is extra practice';
   const next = (due.length ? due : state.words).slice(0,4);
   $('#next-words').innerHTML = next.length ? next.map(w => `<div class="next-word"><span class="word-initial">${escapeHtml(w.word[0])}</span><div><div class="next-word-name">${escapeHtml(w.word)}</div><div class="next-word-definition">${escapeHtml(w.definition || 'A word waiting for its story')}</div></div>${badge(w)}<button class="icon-button" data-drill="${w.id}" aria-label="Drill ${escapeHtml(w.word)}">${icon('arrow')}</button></div>`).join('') : empty('Start with a word you know.', 'Add a few words from your writing, or try our starter collection.', 'starter', 'Add starter words');
@@ -167,6 +167,7 @@ function render() {
   renderQueue();
   renderKeys();
   renderPracticeModes();
+  $('[data-filter="confident"]').textContent=state.settings.scheduler==='fsrs' ? 'Reviewing' : 'Confident';
   renderDrillSuggestions();
   if (currentPage !== 'settings') {applyTextSize(state.settings.text_size);$$('audio').forEach(audio=>audio.volume = (state.settings.audio_volume ?? 100) / 100);}
 }
@@ -177,16 +178,17 @@ function renderDrillSuggestions() {
 }
 function visibleWords() {
   const query = $('#word-search').value.toLowerCase().trim();
-  return state.words.filter(w => (!query || [w.word,w.definition,w.tag].some(s => s.toLowerCase().includes(query))) && (wordFilter === 'all' || wordFilter === 'due' && w.is_due || wordFilter === 'learning' && ['New','Learning'].includes(w.state) || wordFilter === 'confident' && w.state === 'Confident' || wordFilter === 'pending' && preparationPending(w)));
+  return state.words.filter(w => (!query || [w.word,w.definition,w.tag].some(s => s.toLowerCase().includes(query))) && (wordFilter === 'all' || wordFilter === 'due' && w.is_due || wordFilter === 'learning' && ['New','Learning'].includes(w.state) || wordFilter === 'confident' && ['Confident','Reviewing'].includes(w.state) || wordFilter === 'pending' && preparationPending(w)));
 }
 function renderLibrary() {
   const words = visibleWords();
-  $('#word-list').innerHTML = words.length ? words.map(w => `<div class="library-row"><div class="library-word"><input type="checkbox" data-select="${w.id}" aria-label="Select ${escapeHtml(w.word)}" ${selected.has(w.id) ? 'checked' : ''}><div><strong>${escapeHtml(w.word)} ${badge(w)}</strong><p title="${escapeHtml(w.definition || w.enrichment_error || 'Waiting for preparation')}">${escapeHtml(w.definition || (w.enrichment_error ? 'Preparation paused — try again or edit' : 'Waiting for a meaning'))}${w.tag ? ` · ${escapeHtml(w.tag)}` : ''}</p></div></div><div class="recall">${w.accuracy === null ? '—' : w.accuracy + '%'}<small>${w.reviews ? w.reviews + ' reviews' : 'Not reviewed'}</small></div><div class="due-date">${w.is_due ? '<strong>Ready today</strong>' : escapeHtml(new Date(w.due).toLocaleDateString(undefined,{month:'short',day:'numeric'}))}</div><div class="library-actions"><button class="icon-button" data-drill="${w.id}" aria-label="Drill ${escapeHtml(w.word)}">${icon('keyboard')}</button><button class="icon-button" data-edit="${w.id}" aria-label="Edit ${escapeHtml(w.word)}">${icon('edit')}</button></div></div>`).join('') : empty(state.words.length ? 'No words here just yet.' : 'Every notebook begins somewhere.', state.words.length ? 'Try a different search or filter.' : 'Add words from your essays, reading, or everyday life.', state.words.length ? '' : 'add', 'Add your first words');
+  $('#word-list').innerHTML = words.length ? words.map(w => `<div class="library-row"><div class="library-word"><input type="checkbox" data-select="${w.id}" aria-label="Select ${escapeHtml(w.word)}" ${selected.has(w.id) ? 'checked' : ''}><div><strong>${escapeHtml(w.word)} ${badge(w)}</strong><p title="${escapeHtml(w.definition || w.enrichment_error || 'Waiting for preparation')}">${escapeHtml(w.definition || (w.enrichment_error ? 'Preparation paused — try again or edit' : 'Waiting for a meaning'))}${w.tag ? ` · ${escapeHtml(w.tag)}` : ''}</p></div></div><div class="recall" title="Lifetime unaided answers for this spelling, including extra practice">${w.accuracy === null ? '—' : w.accuracy + '%'}<small>${w.reviews ? w.reviews + ' reviews' : 'Not reviewed'}</small></div><div class="due-date">${w.is_due ? '<strong>Ready today</strong>' : escapeHtml(new Date(w.due).toLocaleDateString(undefined,{month:'short',day:'numeric'}))}</div><div class="library-actions"><button class="icon-button" data-drill="${w.id}" aria-label="Drill ${escapeHtml(w.word)}">${icon('keyboard')}</button><button class="icon-button" data-edit="${w.id}" aria-label="Edit ${escapeHtml(w.word)}">${icon('edit')}</button></div></div>`).join('') : empty(state.words.length ? 'No words here just yet.' : 'Every notebook begins somewhere.', state.words.length ? 'Try a different search or filter.' : 'Add words from your essays, reading, or everyday life.', state.words.length ? '' : 'add', 'Add your first words');
   $('#selection-bar').hidden = selected.size === 0;
   $('#selection-count').textContent = `${selected.size} word${selected.size === 1 ? '' : 's'} selected`;
   $('#select-all').checked = words.length > 0 && words.every(w => selected.has(w.id));
   $('#select-all').indeterminate = words.some(w => selected.has(w.id)) && !$('#select-all').checked;
   renderPracticeModes();
+  $('[data-filter="confident"]').textContent=state.settings.scheduler==='fsrs' ? 'Reviewing' : 'Confident';
 }
 function renderQueue() {
   const job = state.enrichment, usesApi = state.settings.preparation_method === 'api';
@@ -211,7 +213,8 @@ function renderPracticeModes() {
 function renderProgress() {
   const p = state.progress;
   $('#meaning-progress').textContent = p.meanings ? `${p.meanings} meaning quizzes · ${Math.round(100*p.meanings_correct/p.meanings)}% correct · separate from spelling recall` : 'Meaning quiz results will appear here, separate from spelling recall.';
-  $('#progress-stats').innerHTML = stat('Unaided review attempts',p.reviews,'First answers, without revealed spelling','book') + stat('Correctly remembered',p.correct,'Progress you can build on','check') + stat('Drill repetitions',p.drills,'Focused practice, counted separately','keyboard');
+  $('#spaced-progress').textContent = `${p.spaced_reviews || 0} spaced spelling recalls · ${p.spaced_reviews ? Math.round(100*p.spaced_correct/p.spaced_reviews)+'% correct' : 'waiting for your first due, unaided answer'} · First due unaided answer per word per UTC day, since this upgrade. Lifetime totals below include extra practice and older history.`;
+  $('#progress-stats').innerHTML = stat('Unaided review attempts',p.reviews,'First answers, without revealed spelling','book') + stat('Correct unaided answers',p.correct,'Including extra practice and older history','check') + stat('Drill repetitions',p.drills,'Focused practice, counted separately','keyboard');
   const days = Array.from({length:7},(_,i) => {const d = new Date(); d.setUTCDate(d.getUTCDate() - (6-i)); return d.toISOString().slice(0,10);});
   const maximum = Math.max(5,...p.history.map(d => d.total));
   $('#activity-chart').innerHTML = days.map(day => {const data = p.history.find(h => h.day === day) || {total:0,correct:0};return `<div class="chart-day"><span class="chart-value">${data.total || '·'}</span><div class="bar-track"><div class="bar-total" data-height="${Math.max(3,128 * data.total / maximum)}"><div class="bar-correct" data-height="${data.total ? 100 * data.correct / data.total : 0}" data-percent="true"></div></div></div><span>${new Date(day + 'T12:00:00Z').toLocaleDateString(undefined,{weekday:'short',timeZone:'UTC'})}</span></div>`;}).join('');
@@ -226,6 +229,7 @@ function fillSettings() {
   form.elements.quiz_interval_fixed.value = state.settings.quiz_interval_min;
   updateQuizRhythm();updateVolume();applyTextSize(form.elements.text_size.value);
   $('#proxy-password-note').textContent = state.settings.proxy_password_set ? 'saved locally' : 'optional';
+  renderSchedulerSetting();
   settingsBaseline = JSON.stringify(settingsPayload());updateSettingsDirty();
 }
 function applyTextSize(size) {
@@ -272,6 +276,41 @@ function renderKeys() {
   const keys = state.enrichment.keys;
   $('#key-count').textContent = `${keys.length} key${keys.length === 1 ? '' : 's'} configured`;
   $('#key-usage').innerHTML = keys.length ? keys.map(k => `<div class="key-row"><span class="status-dot"></span><span>${escapeHtml(k.label)}</span><span class="badge ${k.available ? 'confident' : 'pending'}">${k.available ? 'Ready' : escapeHtml(k.reason || 'Budget reached')}</span><span>${k.requests} / ${k.budget} requests</span></div>`).join('') : '<p class="muted small">Add keys below to enable optional word preparation. Manual practice works without them.</p>';
+}
+function renderSchedulerSetting() {
+  const active=state.settings.scheduler || 'legacy';
+  $('#scheduler-current').textContent=active==='fsrs' ? 'FSRS · adaptive dates' : 'Legacy · fixed stages';
+  $('#scheduler-switch').textContent=active==='fsrs' ? 'Preview switching to Legacy' : 'Preview switching to FSRS';
+}
+async function previewScheduler() {
+  await waitForSessionEnd();
+  if (settingsDirty()) throw new Error('Save or discard your other settings changes before previewing the scheduler.');
+  const target=state.settings.scheduler==='fsrs' ? 'legacy' : 'fsrs';
+  const preview=await api('/scheduler/preview','POST',{target});
+  schedulerPreview=preview;
+  const name=target==='fsrs' ? 'FSRS' : 'Legacy';
+  $('#scheduler-switch-title').textContent=`Switch to ${name}?`;
+  $('#scheduler-workload').innerHTML=['legacy','fsrs'].map(engine=>{
+    const counts=preview.counts[engine];
+    return `<div class="scheduler-count ${engine===target ? 'is-target' : ''}"><strong>${engine==='fsrs' ? 'FSRS' : 'Legacy'}</strong><span><b>${counts.due}</b> due now</span><small>${counts.next_7_days} more currently dated within 7 days${engine==='fsrs' ? ` · ${counts.new} fresh cards` : ''}</small></div>`;
+  }).join('');
+  $('#scheduler-date-changes').innerHTML=preview.changes.length ? `<summary>Example date changes</summary>${preview.changes.map(w=>`<p><strong>${escapeHtml(w.word)}</strong><br>Legacy: ${escapeHtml(new Date(w.legacy).toLocaleString())}<br>FSRS: ${escapeHtml(new Date(w.fsrs).toLocaleString())}</p>`).join('')}` : '<summary>No date differences to show</summary>';
+  $('#scheduler-confirm').textContent=`Switch to ${name}`;$('#scheduler-confirm').hidden=false;
+  $('#scheduler-switch-error').textContent='';
+  $('#scheduler-dialog').showModal();
+}
+async function confirmScheduler() {
+  if (!schedulerPreview) return;
+  try {
+    state.settings=await api('/scheduler/switch','POST',{target:schedulerPreview.target,token:schedulerPreview.token});
+    $('#scheduler-dialog').close();schedulerPreview=null;
+    await refresh();renderSchedulerSetting();
+    toast(`Scheduler changed to ${state.settings.scheduler==='fsrs' ? 'FSRS' : 'Legacy'}.`);
+  } catch(error) {
+    $('#scheduler-switch-error').textContent=error.message;
+    $('#scheduler-confirm').hidden=true;
+    throw error;
+  }
 }
 function settingsPayload() {
   const form = $('#settings-form'), result = {};
@@ -445,15 +484,12 @@ function reviewPool(ids, endless, settings) {
   const quizzes = candidates.filter(w => exerciseTypes(w,settings).includes('meaning'))
     .sort((a,b) => (b.meaning_priority ?? 0)-(a.meaning_priority ?? 0));
   const limit = endless ? 10 : ids ? candidates.length : (settings.review_session_size ?? 10);
-  const words = spelling.slice(0,limit).map(w => {
-    const types = exerciseTypes(w,settings).filter(type=>type!=='meaning');
-    return {...w,exercise:types[w.reviews % types.length]};
-  });
+  const words = spelling.slice(0,limit).map(w => spellingExercise(w,settings));
   return {words,quizzes:quizzes.slice(0,limit)};
 }
-function startReview(ids, endless = false, meaningOnly = false) {
+async function startReview(ids, endless = false, meaningOnly = false) {
   if (!state.settings.review_enabled) return;
-  const pool = reviewPool(ids,endless,state.settings);
+  let pool = reviewPool(ids,endless,state.settings);
   if (!ids && !endless && !meaningOnly && state.words.length && !pool.words.length && ['sentence_enabled','definition_enabled','audio_enabled'].some(k=>state.settings[k])) {
     const extra = reviewPool(undefined,true,state.settings);
     $('#review-complete-note').textContent = extra.words.length ? 'No spelling reviews are due right now. Keep practising in endless mode, or take a meaning quiz session.' : 'No words are ready for an enabled spelling exercise. Add a sentence, meaning, or checked recording, or take a meaning quiz session.';
@@ -461,36 +497,79 @@ function startReview(ids, endless = false, meaningOnly = false) {
     $('#review-complete-quizzes').disabled = !pool.quizzes.length;
     $('#review-complete-dialog').showModal();return;
   }
-  const session = TypewriterReview.create(meaningOnly ? [] : pool.words,pool.quizzes,state.settings,Math.random,{endless});
+  if (sessionStarting) return;
+  sessionStarting = true;
+  let saved;
+  try {
+    await waitForSessionEnd();
+    saved = await api('/practice-sessions','POST',{kind:endless ? 'endless' : ids ? 'selected' : 'normal',ids:ids || null,meaning_only:meaningOnly});
+    pool.words = saved.words.map(w=>spellingExercise(w,saved.settings));
+  } finally {sessionStarting=false;}
+  const session = TypewriterReview.create(meaningOnly ? [] : pool.words,pool.quizzes,saved.settings,Math.random,{endless});
   if (!session.queue.length) {
+    await api(`/practice-sessions/${saved.id}/end`,'POST',{});
     if (!state.words.length) {openWord();toast('Add some words, or try the starter collection.');}
     else {toast('No words are available for the enabled exercises. Add clues, check recordings, or choose other exercises in Settings.');navigate('words');}
     return;
   }
-  practice = {...session,scopeIds:ids ? [...ids] : null,mode:'review',attempts:0,correct:0,hinted:false,feedback:false,correction:false,started:Date.now(),repetitions:0};
+  practice = {...session,serverId:saved.id,scheduler:saved.scheduler,scopeIds:ids ? [...ids] : null,mode:'review',attempts:0,correct:0,hinted:false,feedback:false,correction:false,started:Date.now(),repetitions:0};
   openPractice();
 }
 
-function startDrill(event) {
+async function startDrill(event) {
   event.preventDefault();
   const word = state.words.find(w => w.id === Number($('#drill-word').value));
   if (!word || !state.settings.drill_enabled) return;
+  if (sessionStarting) return;
+  sessionStarting=true;
+  let saved;
+  try {
+    await waitForSessionEnd();
+    saved=await api('/practice-sessions','POST',{kind:'drill',ids:[word.id]});
+  } finally {sessionStarting=false;}
   $('#drill-dialog').close();
-  practice = {mode:'drill',queue:[word],index:0,attempts:0,correct:0,hinted:false,feedback:false,correction:false,started:Date.now(),repetitions:0,firstDrillAttempt:null,lastDrillAttempt:null,target:Number($('#drill-target').value),show:$('#drill-show').checked};
+  practice = {serverId:saved.id,scheduler:saved.scheduler,quizSettings:saved.settings,mode:'drill',queue:[word],index:0,attempts:0,correct:0,hinted:false,feedback:false,correction:false,started:Date.now(),repetitions:0,firstDrillAttempt:null,lastDrillAttempt:null,target:Number($('#drill-target').value),show:$('#drill-show').checked};
   openPractice();
 }
+async function waitForSessionEnd() {
+  try {await lastSessionEnd;}
+  catch(error) {
+    if (!lastEndingSession) throw error;
+    lastSessionEnd=api(`/practice-sessions/${lastEndingSession}/end`,'POST',{});
+    await lastSessionEnd;
+  }
+}
+function spellingExercise(word, settings) {
+  const types=exerciseTypes(word,settings).filter(t=>t!=='meaning');
+  return {...word,audio_eligible:audioEligible(word,settings),exercise:types[word.reviews % types.length],spellingRecorded:false};
+}
 function openPractice() {
+  clearInterval(sessionHeartbeat);
+  const session=practice;
+  sessionHeartbeat=setInterval(()=>{
+    if (practice!==session || !$('#practice-summary').hidden) {clearInterval(sessionHeartbeat);return;}
+    api(`/practice-sessions/${session.serverId}/heartbeat`,'POST',{}).catch(error=>{
+      clearInterval(sessionHeartbeat);
+      $('#playback-status').textContent=error.message;
+    });
+  },30000);
   $('#practice-summary').hidden = true; $('#practice-active').hidden = false;
   $('#practice-dialog').showModal();
   renderPractice();
 }
 function currentWord() {return practice.queue[practice.mode === 'drill' ? 0 : practice.index];}
 function concealed(word, text) {return String(text || '').replace(new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'),'________');}
+function audioEligible(word, settings) {
+  const accent=word.pronunciation_accent || settings.pronunciation_accent || 'uk';
+  const urls=word.audio_urls || {};
+  const recording=Object.keys(urls).length ? urls[accent] : accent==='uk' ? word.audio_url : '';
+  return !!(word.audio_verified && !word.audio_flagged && (word.audio_file || recording));
+}
 function exerciseTypes(word, settings = state.settings) {
   const types = [];
   if (settings.sentence_enabled && word.clue) types.push('sentence');
   if (settings.definition_enabled && word.definition && !word.meaning_flagged) types.push('definition');
-  if (settings.audio_enabled && word.audio_eligible) types.push('audio');
+  if (settings.audio_enabled && audioEligible(word,settings)) types.push('audio');
   if (settings.meaning_enabled && word.definition && !word.meaning_flagged && (word.distractors.length === 3 || state.words.some(w => w.definition && !w.meaning_flagged && w.definition.trim().toLowerCase() !== word.definition.trim().toLowerCase()))) types.push('meaning');
   return types;
 }
@@ -502,6 +581,8 @@ function makeMeaningChoices(word) {
   return shuffle([word,...shuffle(others).slice(0,3)]);
 }
 function renderPractice() {
+  practice.questionRequest=crypto.randomUUID();
+  currentWord().audio_eligible=audioEligible(currentWord(),practice.quizSettings || state.settings);
   stopPronunciation(false);
   const word = currentWord(), drill = practice.mode === 'drill', meaning = !drill && word.exercise === 'meaning', audioOnly = !drill && word.exercise === 'audio' && !practice.correction;
   practice.feedback = false; practice.hinted = false; practice.audioBlocked = false; practice.choice = null; practice.wordStarted = Date.now();
@@ -537,7 +618,7 @@ function renderPractice() {
   // A presentation starts sound only for the chosen task, with trusted audio.
   const audioTask = drill ? 'drill' : practice.correction ? 'correction' : word.exercise;
   const defaults = {audio:true};
-  if ((state.settings['autoplay_'+audioTask] ?? defaults[audioTask] ?? false) && word.audio_eligible) guarded(() => listen(true));
+  if (((practice.quizSettings || state.settings)['autoplay_'+audioTask] ?? defaults[audioTask] ?? false) && word.audio_eligible) guarded(() => listen(true));
   setTimeout(() => {if ($('#practice-active').hidden) return;if (meaning) $('.meaning-choice')?.focus();else $('#answer').focus();},20);
 }
 function selectMeaning(index) {
@@ -589,7 +670,7 @@ async function answerSubmit(event) {
     const mode = practice.mode === 'drill' ? 'drill' : practice.correction ? 'correction' : meaning ? 'meaning' : 'review';
     let result;
     try {
-      result = await api(`/words/${word.id}/attempts`,'POST',{answer,mode,version:word.version,exercise:practice.mode === 'drill' ? 'drill' : word.exercise || 'unknown',session_kind:practice.mode === 'drill' ? 'drill' : practice.endless ? 'endless' : practice.scopeIds ? 'selected' : 'normal',hinted:practice.hinted || practice.correction,elapsed_ms:Math.min(86400000,Date.now()-practice.wordStarted)});
+      result = await api(`/words/${word.id}/attempts`,'POST',{answer,mode,request_id:practice.questionRequest,session_id:practice.serverId,version:word.version,exercise:practice.mode === 'drill' ? 'drill' : word.exercise || 'unknown',session_kind:practice.mode === 'drill' ? 'drill' : practice.endless ? 'endless' : practice.scopeIds ? 'selected' : 'normal',hinted:practice.hinted || practice.correction,elapsed_ms:Math.min(86400000,Date.now()-practice.wordStarted)});
     } catch (error) {
       if (practice === session && $('#practice-dialog').open && !$('#practice-active').hidden) practiceFeedback('error','Couldn’t check this answer',`<p>${escapeHtml(error.message || 'Please try again.')}</p>`);
       throw error;
@@ -640,14 +721,27 @@ async function advancePractice() {
   button.disabled = true;
   try {
     const quizzes = state.words.filter(w=>exerciseTypes(w,session.quizSettings).includes('meaning'));
-    if (TypewriterReview.advance(session,quizzes)) {renderPractice();return;}
-    if (!session.endless) {finishPractice();return;}
+    if (session.pendingAdvance || TypewriterReview.advance(session,quizzes)) {
+      session.pendingAdvance=true;
+      if (!session.endless && !session.scopeIds && currentWord().exercise!=='meaning') {
+        const result=await api(`/practice-sessions/${session.serverId}/next`,'POST',{position:session.spellingsDone});
+        if (!result.word) {session.pendingAdvance=false;finishPractice(true);return;}
+        const chosen=spellingExercise(result.word,session.quizSettings);
+        // Keep the displayed queue unique if coverage picks a different remaining word.
+        const other=session.queue.findIndex((w,i)=>i>session.index && w.exercise!=='meaning' && w.id===chosen.id);
+        if (other>=0) session.queue[other]=session.queue[session.index];
+        session.queue[session.index]=chosen;
+      }
+      session.pendingAdvance=false;
+      renderPractice();return;
+    }
+    if (!session.endless) {finishPractice(true);return;}
     button.textContent = 'Finding your next words…';
     await refresh();
     if (practice !== session || !$('#practice-dialog').open || $('#practice-active').hidden) return;
     const pool = reviewPool(session.scopeIds,true,session.quizSettings);
     if (TypewriterReview.replenish(session,pool.words,pool.quizzes)) renderPractice();
-    else {finishPractice();toast('No more words are available for these exercises. Add material or choose other exercises in Settings.');}
+    else {finishPractice(true);toast('No more words are available for these exercises. Add material or choose other exercises in Settings.');}
   } catch (error) {
     if (practice === session && $('#practice-dialog').open && !$('#practice-active').hidden) {
       session.feedback = true;session.lastCorrect = true;
@@ -669,6 +763,11 @@ function finishPractice(answerSaved = false) {
   if (!practice) return;
   if (answerBusy && !answerSaved) {practice.endRequested = true;$('#playback-status').textContent = 'Finishing your current answer…';return;}
   practice.endRequested = false;
+  clearInterval(sessionHeartbeat);
+  if (!practice.endPromise) practice.endPromise=api(`/practice-sessions/${practice.serverId}/end`,'POST',{}).catch(error=>{toast(error.message);throw error;});
+  // Keep a handled rejection even if the user leaves the summary before retrying.
+  lastSessionEnd=practice.endPromise;lastEndingSession=practice.serverId;
+  practice.endPromise.catch(()=>{});
   const p = practice, minutes = Math.max(1,Math.round((Date.now()-p.started)/60000));
   $('#practice-active').hidden = true; $('#practice-summary').hidden = false;
   $('#practice-meter-fill').style.width = '100%';
@@ -694,7 +793,7 @@ async function saveDrillCompletion(session) {
   } finally {session.completionBusy = false;}
 }
 function pronunciationUrl(word, preview = false) {
-  return `/api/words/${word.id}/audio?accent=${word.pronunciation_accent || state.settings.pronunciation_accent || 'uk'}&v=${word.audio_revision || word.version || 0}${preview ? '&preview=1' : ''}`;
+  return `/api/words/${word.id}/audio?accent=${word.pronunciation_accent || (!preview && practice?.quizSettings?.pronunciation_accent) || state.settings.pronunciation_accent || 'uk'}&v=${word.audio_revision || word.version || 0}${preview ? '&preview=1' : ''}`;
 }
 function preparePronunciation(word) {
   const audio = $('#pronunciation');
@@ -969,6 +1068,7 @@ $('#prepared-file').addEventListener('change',event=>guarded(async()=>{
 const actions = {
   'use-alternate-pronunciations':useAlternatePronunciations,
   'keep-pronunciations':()=>{pronunciationNotices=[];$('#pronunciation-choice-dialog').close();},
+  'preview-scheduler':previewScheduler,'confirm-scheduler':confirmScheduler,'refresh-scheduler-preview':async()=>{$('#scheduler-dialog').close();await previewScheduler();},
   'settings-save-leave':()=>leaveSettings(true), 'settings-discard-leave':()=>leaveSettings(false),
   'settings-keep-editing':()=>{pendingSettingsPage=null;$('#unsaved-settings-dialog').close();},
   add:() => openWord(), starter:addStarter, review:() => startReview(), 'review-endless':() => startReview(undefined,true), 'choose-drill':() => chooseDrill(),
@@ -984,8 +1084,8 @@ const actions = {
   'save-keys':async () => {const result = await api('/keys','PUT',{keys:$('#api-keys').value});$('#api-keys').value = '';await refresh();toast(`${result.count} keys saved locally.`);},
   import:() => $('#import-file').click(),
   'delete-word':() => {deletingId = editingId;$('#confirm-message').textContent = `This removes “${state.words.find(w => w.id === editingId).word}” and its practice history from this notebook.`;$('#confirm-dialog').showModal();},
-  'review-complete-endless':()=>{$('#review-complete-dialog').close();startReview(undefined,true);},
-  'review-complete-quizzes':()=>{$('#review-complete-dialog').close();startReview(undefined,false,true);},
+  'review-complete-endless':()=>{$('#review-complete-dialog').close();return startReview(undefined,true);},
+  'review-complete-quizzes':()=>{$('#review-complete-dialog').close();return startReview(undefined,false,true);},
   'edit-practice-word':()=>{if (!answerBusy && practice && !$('#practice-active').hidden) {stopPronunciation();openWord(currentWord().id);}},
   hint:() => {if (!practice) return;practice.hinted = true;$('#practice-word').textContent = currentWord().word;$('#hint-button').hidden = true;$('#practice-label').textContent = 'LOOK, REMEMBER, THEN TYPE';$('#answer').focus();},
   listen:() => listen(),
@@ -1027,7 +1127,7 @@ $('#word-form').elements.word.addEventListener('input',event=>{
   event.target.dataset.previous = word;
   dictionaryApplied = false;
 });
-$('#drill-form').addEventListener('submit',startDrill);
+$('#drill-form').addEventListener('submit',event=>{event.preventDefault();guarded(()=>startDrill(event));});
 $('#drill-search').addEventListener('input',filterDrillWords);
 $('#drill-search').addEventListener('focus',filterDrillWords);
 $('#drill-search').addEventListener('click',renderDrillOptions);
@@ -1115,3 +1215,7 @@ setInterval(async () => {
   if (!state || document.hidden) return;
   try {const job = await api('/enrichment');if (job.busy !== state.enrichment.busy || job.done !== state.enrichment.done || job.pending !== state.enrichment.pending || job.message !== state.enrichment.message || job.status !== state.enrichment.status || job.id !== state.enrichment.id) {await refresh();}else {state.enrichment = job;renderQueue();renderKeys();}}catch { /* Keep the notebook usable during a temporary disconnect. */ }
 },4000);
+
+window.addEventListener('pagehide',()=>{
+  if (practice?.serverId && !practice.endPromise) fetch(`/api/practice-sessions/${practice.serverId}/end`,{method:'POST',keepalive:true,headers:{'Content-Type':'application/json','X-Typewriter-Token':token},body:'{}'}).catch(()=>{});
+});
