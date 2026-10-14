@@ -138,6 +138,25 @@ checks Cambridge through your configured proxy, and saves an available alternati
 where the preferred accent is missing. It preserves uploads and pronunciation flags,
 and writes a private report in `data/`.
 
+## Essay studio
+
+Open **Essay studio** for a quiet writing space with a title, prompt, word count,
+and automatic local saving. Your text stays exactly as typed: autocorrect and
+browser spelling services are disabled. Turn **Highlight possible spelling errors**
+on or off at any time. Underlines use a bundled offline English wordlist that accepts
+British and American spellings; names and uncommon words may still be flagged.
+This checks spelling rather than grammar or essay quality, and uses no API quota.
+
+There is one current draft. **Download draft** saves a text copy before you start
+another. The draft is included in notebook backups; import restores it only when
+the current draft is empty. Existing essays stay protected. An unsaved copy in the
+current browser tab helps recover after a failed save or reload. If another tab has
+saved a newer essay, download your version before reloading; recovery offers an
+explicit choice instead of silently overwriting the other draft.
+
+The wordlist's provenance and notices are in
+[`typewriter/resources/spelling/`](typewriter/resources/spelling/README.md).
+
 ## Gemini and request limits
 
 Place one API key per line in **`api_keys.txt`**, or paste keys in Settings.

@@ -122,7 +122,7 @@ async function useAnotherLLM() {
   await refresh();fillSettings();openPreparation(ids?.length ? ids : undefined);
 }
 function navigate(page, force = false) {
-  if (!['today','words','progress','settings'].includes(page)) page = 'today';
+  if (!['today','words','essay','progress','settings'].includes(page)) page = 'today';
   if (!force && currentPage === 'settings' && page !== 'settings' && settingsDirty()) {
     pendingSettingsPage = page;
     history.replaceState(null,'','#settings');
@@ -133,10 +133,11 @@ function navigate(page, force = false) {
   currentPage = page;
   $$('.page').forEach(el => el.hidden = el.id !== 'page-' + page);
   $$('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.page === page));
-  $('#page-title').textContent = ({today:'Today',words:'My words',progress:'Progress',settings:'Settings'})[page];
+  $('#page-title').textContent = ({today:'Today',words:'My words',essay:'Essay studio',progress:'Progress',settings:'Settings'})[page];
   if (location.hash !== '#' + page) history.replaceState(null, '', '#' + page);
   if (page === 'settings' && state && (previousPage !== 'settings' || settingsBaseline === null)) fillSettings();
   window.scrollTo({top:0,behavior:'instant'});
+  if (page === 'essay') guarded(()=>TypewriterEssay.open());
 }
 function badge(word) {
   const type = word.state.toLowerCase();
@@ -1081,7 +1082,7 @@ $('#settings-form').addEventListener('input',updateSettingsDirty);
 $('#settings-form').addEventListener('change',updateSettingsDirty);
 window.addEventListener('beforeunload',event=>{if(settingsDirty()){event.preventDefault();event.returnValue='';}});
 $('#confirm-delete').addEventListener('click',() => guarded(async () => {await api('/words/'+deletingId,'DELETE');$('#confirm-dialog').close();$('#word-dialog').close();await refresh();toast('Word removed.');},$('#confirm-delete')));
-$('#import-file').addEventListener('change',event => guarded(async () => {const file = event.target.files[0];if (!file) return;if (file.size > 32*1024*1024) throw new Error('Choose a backup smaller than 32 MB.');let backup;try {backup=JSON.parse(await file.text());} catch {throw new Error('That file is not a valid JSON backup.');}const r=await api('/import','POST',backup);await refresh();toast(`${r.added} words imported. ${r.skipped} existing words kept.`);event.target.value='';}));
+$('#import-file').addEventListener('change',event => guarded(async () => {const file = event.target.files[0];if (!file) return;if (file.size > 32*1024*1024) throw new Error('Choose a backup smaller than 32 MB.');let backup;try {backup=JSON.parse(await file.text());} catch {throw new Error('That file is not a valid JSON backup.');}const r=await api('/import','POST',backup);await refresh();toast(`${r.added} words imported. ${r.skipped} existing words kept.${r.essay_imported ? " Essay draft restored." : backup.essay && [backup.essay.title,backup.essay.prompt,backup.essay.body].some(Boolean) ? " Existing essay draft kept." : ""}`);event.target.value='';}));
 $('#word-dialog').addEventListener('close',() => {$('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();});
 $('#preparation-dialog').addEventListener('close',()=>{if (!preparationApplying) invalidatePreparedPreview();});
 $('#practice-dialog').addEventListener('cancel',event => {event.preventDefault();if ($('#practice-summary').hidden) finishPractice();else actions['close-practice']();});

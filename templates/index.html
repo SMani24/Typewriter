@@ -10,6 +10,7 @@
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/style.css">
   <script src="/static/review.js" defer></script>
+  <script src="/static/essay.js" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -19,6 +20,7 @@
     <nav aria-label="Main navigation">
       <button class="nav-item active" data-page="today"><span data-icon="sun"></span>Today<span class="nav-count" id="nav-due">0</span></button>
       <button class="nav-item" data-page="words"><span data-icon="book"></span>My words</button>
+      <button class="nav-item" data-page="essay"><span data-icon="edit"></span>Essay studio</button>
       <button class="nav-item" data-page="progress"><span data-icon="chart"></span>Progress</button>
       <button class="nav-item" data-page="settings"><span data-icon="settings"></span>Settings</button>
     </nav>
@@ -56,6 +58,13 @@
         <section class="panel progress-note"><span data-icon="leaf"></span><div><h3>Confidence takes more than one good answer.</h3><p>Drills help you practise. Reviews check what you remember. A word becomes “Confident” after successful unaided reviews across at least three days.</p></div></section>
       </section>
 
+      <section class="page" id="page-essay" hidden>
+        <div class="welcome"><div><span class="eyebrow">A SPACE TO FIND YOUR VOICE</span><h1>One thought at a time.</h1><p>Room for your ideas. Space to practise your spelling.</p></div><span class="pill"><span class="status-dot"></span>Saved on this computer</span></div>
+        <div class="essay-layout"><aside class="panel essay-notes"><span class="eyebrow">BEFORE YOU BEGIN</span><h3>Set the scene.</h3><label for="essay-title">Draft title<input id="essay-title" maxlength="120" placeholder="Untitled essay" autocomplete="off" spellcheck="false"></label><label for="essay-prompt">Your question or writing prompt<textarea id="essay-prompt" rows="7" maxlength="4000" placeholder="What would you like to write about?" spellcheck="false" autocorrect="off" autocapitalize="none"></textarea></label><div class="essay-aside-note"><span data-icon="leaf"></span><p>Let the ideas come first. You can check your spelling when you’re ready.</p></div><button class="button secondary" id="essay-download"><span data-icon="download"></span>Download draft</button><p class="field-note">One current draft, saved automatically. Download a copy to keep before starting another.</p></aside>
+        <section class="essay-paper"><div class="essay-paper-heading"><div><span class="eyebrow">YOUR WORDS, UNINTERRUPTED</span><h2>The blank page is yours.</h2></div><span id="essay-word-count" class="essay-count">0 words</span></div><div id="essay-recovery" class="info-note" hidden><p>An unsaved draft from this tab is available. The saved essay has also changed.</p><div class="inline-actions"><button id="essay-restore" class="text-button">Restore unsaved draft</button><button id="essay-keep" class="text-button">Keep saved version</button></div></div>
+        <label class="sr-only" for="essay-body">Write your essay</label><div class="essay-editor"><div id="essay-highlights" aria-hidden="true"><div id="essay-highlight-content"></div></div><textarea id="essay-body" maxlength="100000" placeholder="Start with a thought…" spellcheck="false" autocorrect="off" autocomplete="off" autocapitalize="none" writingsuggestions="false" lang="en" disabled></textarea></div>
+        <div class="essay-toolbar"><label class="checkbox-label"><input id="essay-highlight" type="checkbox">Highlight possible spelling errors</label><span id="essay-spelling-status" class="field-note" role="status">Spelling hints are off.</span></div><p class="essay-hint">Your spelling stays exactly as you type it. Names and uncommon words may be flagged.</p><div class="essay-save-row"><span id="essay-save-status" class="field-note" role="status">Opening your draft…</span><button id="essay-save" class="text-button">Save now</button></div></section></div>
+      </section>
       <section class="page" id="page-settings" hidden>
         <div class="welcome"><div><h1>Make yourself at home.</h1><p>A few thoughtful settings for the way you practise.</p></div></div>
         <form id="settings-form" class="settings-layout">

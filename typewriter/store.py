@@ -98,6 +98,12 @@ class Store:
                     id INTEGER PRIMARY KEY, created TEXT NOT NULL,
                     level TEXT NOT NULL, message TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS essay (
+                    id INTEGER PRIMARY KEY CHECK (id=1), title TEXT NOT NULL,
+                    prompt TEXT NOT NULL, body TEXT NOT NULL,
+                    highlight INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 0
+                );
             """)
             columns = {r["name"] for r in db.execute("PRAGMA table_info(words)")}
             for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''", "meaning_flagged": "INTEGER NOT NULL DEFAULT 0", "distractors": "TEXT NOT NULL DEFAULT '[]'", "audio_urls": "TEXT NOT NULL DEFAULT '{}'", "pronunciation_accent": "TEXT NOT NULL DEFAULT ''", "recall_reset_at": "TEXT NOT NULL DEFAULT ''", "drill_completed_at": "TEXT NOT NULL DEFAULT ''"}.items():
@@ -491,6 +497,40 @@ class Store:
             totals = dict(db.execute("SELECT COUNT(CASE WHEN mode='review' AND hinted=0 THEN 1 END) AS reviews, COUNT(CASE WHEN mode='review' AND hinted=0 AND correct=1 THEN 1 END) AS correct, COUNT(CASE WHEN mode='drill' THEN 1 END) AS drills, COUNT(CASE WHEN mode='meaning' THEN 1 END) AS meanings, COUNT(CASE WHEN mode='meaning' AND correct=1 THEN 1 END) AS meanings_correct FROM attempts").fetchone())
         return {"history": history, "mistakes": mistakes, **totals}
 
+    def essay(self):
+        with self.db() as db:
+            row = db.execute("SELECT title,prompt,body,highlight,updated,version FROM essay WHERE id=1").fetchone()
+        result = dict(row) if row else {"title":"", "prompt":"", "body":"", "highlight":False, "updated":None, "version":0}
+        result["highlight"] = bool(result["highlight"])
+        return result
+
+    @staticmethod
+    def validate_essay(data):
+        if not isinstance(data, dict):
+            raise ValueError("Choose an essay draft.")
+        result = {}
+        for key, maximum in (("title",120), ("prompt",4000), ("body",100000)):
+            value = data.get(key, "")
+            if not isinstance(value, str) or len(value) > maximum:
+                raise ValueError(f"Essay {key} must be text up to {maximum:,} characters.")
+            result[key] = value
+        if not isinstance(data.get("highlight", False), bool):
+            raise ValueError("Choose whether to highlight possible spelling errors.")
+        result["highlight"] = data.get("highlight", False)
+        return result
+
+    def save_essay(self, data):
+        item = self.validate_essay(data)
+        with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("SELECT version FROM essay WHERE id=1").fetchone()
+            version = row["version"] if row else 0
+            if type(data.get("version")) is not int or data["version"] != version:
+                raise ValueError("This essay changed in another tab. Download your draft before reloading to avoid losing either version.")
+            stamp = now()
+            db.execute("INSERT OR REPLACE INTO essay (id,title,prompt,body,highlight,updated,version) VALUES (1,?,?,?,?,?,?)", (item["title"],item["prompt"],item["body"],int(item["highlight"]),stamp,version+1))
+        return {**item, "updated":stamp, "version":version+1}
+
     def export(self):
         with self.db() as db:
             words = [dict(r) for r in db.execute("SELECT * FROM words")]
@@ -498,12 +538,13 @@ class Store:
         for word in words:
             word["distractors"] = json.loads(word["distractors"])
             word["audio_urls"] = json.loads(word["audio_urls"])
-        return {"format": "typewriter", "version": 1, "exported": now(), "words": words, "attempts": attempts}
+        return {"format": "typewriter", "version": 1, "exported": now(), "words": words, "attempts": attempts, "essay": self.essay()}
 
     def import_backup(self, data):
         if not isinstance(data, dict) or data.get("format") != "typewriter" or data.get("version") != 1:
             raise ValueError("Choose a Typewriter backup file.")
         words, attempts = data.get("words"), data.get("attempts")
+        essay = self.validate_essay(data["essay"]) if "essay" in data else None
         if not isinstance(words, list) or not isinstance(attempts, list) or len(words) > 10000 or len(attempts) > 100000:
             raise ValueError("Invalid or oversized backup.")
         # Validate everything before modifying the database. Merge new words only;
@@ -556,7 +597,7 @@ class Store:
                     raise ValueError()
             except (ValueError, KeyError, TypeError):
                 raise ValueError("Invalid practice dates.") from None
-        added, id_map = 0, {}
+        added, id_map, essay_imported = 0, {}, False
         with self.db() as db:
             for original, item in validated:
                 existing = db.execute("SELECT id FROM words WHERE word=?", (item["word"],)).fetchone()
@@ -575,4 +616,9 @@ class Store:
             for a in attempts:
                 if a["word_id"] in id_map:
                     db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created) VALUES (?,?,?,?,?,?,?)", (id_map[a["word_id"]], a["answer"], a["correct"], a["mode"], a["hinted"], a["elapsed_ms"], a["created"]))
-        return {"added": added, "skipped": len(words) - added}
+            if essay and any(essay[k] for k in ("title","prompt","body")):
+                current = db.execute("SELECT * FROM essay WHERE id=1").fetchone()
+                if not current or not any(current[k] for k in ("title","prompt","body")):
+                    db.execute("INSERT OR REPLACE INTO essay (id,title,prompt,body,highlight,updated,version) VALUES (1,?,?,?,?,?,?)", (essay["title"],essay["prompt"],essay["body"],int(essay["highlight"]),now(),current["version"]+1 if current else 1))
+                    essay_imported = True
+        return {"added": added, "skipped": len(words) - added, "essay_imported": essay_imported}

@@ -19,3 +19,5 @@ typewriter-backup*.json
 
 typewriter-preparation*.zip
 typewriter-preparation*.md
+
+/docs/typewriter-review-scheduling-development-plan.md

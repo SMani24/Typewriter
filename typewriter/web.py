@@ -12,6 +12,7 @@ from .dictionary import Dictionary
 from .enrichment import Enrichment, parse_keys
 from .preparation import Preparation
 from .models import ModelAccessError
+from .spelling import check as check_spelling
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -79,6 +80,18 @@ def create_app(data_dir=None, keys_path=None, background=True):
     @app.get("/api/state")
     def state():
         return jsonify(words=store.list_words(), progress=store.progress(), settings=store.settings(), enrichment=enrichment.snapshot(), logs=store.logs())
+
+    @app.get("/api/essay")
+    def essay():
+        return jsonify(store.essay())
+
+    @app.put("/api/essay")
+    def save_essay():
+        return jsonify(store.save_essay(body()))
+
+    @app.post("/api/essay/spelling")
+    def essay_spelling():
+        return jsonify(check_spelling(body().get("text")))
 
     @app.get("/api/logs/export")
     def export_logs():
