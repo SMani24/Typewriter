@@ -169,6 +169,7 @@ function render() {
   renderPracticeModes();
   $('[data-filter="confident"]').textContent=state.settings.scheduler==='fsrs' ? 'Reviewing' : 'Confident';
   renderDrillSuggestions();
+  renderSchedulerSetting();
   if (currentPage !== 'settings') {applyTextSize(state.settings.text_size);$$('audio').forEach(audio=>audio.volume = (state.settings.audio_volume ?? 100) / 100);}
 }
 function renderDrillSuggestions() {
@@ -281,6 +282,8 @@ function renderSchedulerSetting() {
   const active=state.settings.scheduler || 'legacy';
   $('#scheduler-current').textContent=active==='fsrs' ? 'FSRS · adaptive dates' : 'Legacy · fixed stages';
   $('#scheduler-switch').textContent=active==='fsrs' ? 'Preview switching to Legacy' : 'Preview switching to FSRS';
+  $('#review-scheduler-note').textContent=active==='fsrs' ? 'Using FSRS · adaptive spelling dates' : 'Using Legacy · fixed spelling stages';
+  $$('[data-scheduler-explanation]').forEach(section=>section.hidden=section.dataset.schedulerExplanation!==active);
 }
 async function previewScheduler() {
   await waitForSessionEnd();

@@ -66,12 +66,32 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
       await page.waitForSelector('#practice-dialog[open]');
     }
     async function end() {await page.keyboard.press('Escape');await page.locator('[data-action="close-practice"]').click();}
+    async function checkHelp(engine) {
+      if(!await page.locator('#review-ranking-help').evaluate(d=>d.open)) await page.locator('#review-ranking-help summary').click();
+      const text=await page.locator('#review-ranking-help').innerText();
+      assert(text.includes('Using '+engine));
+      assert(text.includes('Every fifth normal spelling question'));
+      assert(text.includes('Meanings have their own ranking'));
+      if(engine==='FSRS') {
+        assert(text.includes('lowest estimated chance of recall'));
+        assert(text.includes('90% retention'));
+        assert(text.includes('several times in one day'));
+        assert(!text.includes('last eight spaced spelling recalls'));
+        assert(!text.includes('1, 3, 7, 14, then 30 days'));
+      } else {
+        assert(text.includes('last eight spaced spelling recalls'));
+        assert(text.includes('1, 3, 7, 14, then 30 days'));
+        assert(!text.includes('90% retention'));
+      }
+    }
     await page.locator('.nav-item[data-page="settings"]').click();
     assert((await page.locator('#scheduler-current').innerText()).includes('Legacy'));
+    await checkHelp('Legacy');
     await page.locator('#scheduler-switch').click();
     await page.waitForSelector('#scheduler-dialog[open]');
     assert((await page.locator('#scheduler-workload').innerText()).includes('2 due now'));
     assert.equal((await api('/state')).settings.scheduler,'legacy');
+    await checkHelp('Legacy');
     for(const width of [1360,390]) {
       await page.setViewportSize({width,height:1000});
       assert(await page.locator('#scheduler-dialog').evaluate(d=>d.scrollWidth<=d.clientWidth));
@@ -85,9 +105,11 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.locator('#scheduler-confirm').click();
     await page.waitForFunction(()=>document.querySelector('#scheduler-current').textContent.includes('FSRS'));
     assert.equal((await api('/state')).settings.scheduler,'fsrs');
+    await checkHelp('FSRS');
     await page.reload();await page.waitForSelector('#app-content:not([hidden])');
     await page.locator('.nav-item[data-page="settings"]').click();
     assert((await page.locator('#scheduler-current').innerText()).includes('FSRS'));
+    await checkHelp('FSRS');
     // A preview becomes stale when another tab changes data.
     await page.locator('#scheduler-switch').click();
     await page.waitForSelector('#scheduler-dialog[open]');
@@ -147,6 +169,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.locator('#scheduler-switch').click();await page.locator('#scheduler-confirm').click();
     await page.waitForFunction(()=>document.querySelector('#scheduler-current').textContent.includes('Legacy'));
     assert.equal((await api('/export')).attempts.length,saved.attempts.length);
+    await checkHelp('Legacy');
     await page.locator('.nav-item[data-page="progress"]').click();
     assert((await page.locator('#spaced-progress').innerText()).includes('spaced spelling recalls'));
     await page.locator('.nav-item[data-page="settings"]').click();
@@ -156,10 +179,11 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
       await page.reload();await page.waitForSelector('#app-content:not([hidden])');
       await page.locator('.nav-item[data-page="settings"]').click();
       await page.setViewportSize({width:390,height:1000});
+      await checkHelp('Legacy');
       assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),size+' scheduler settings overflow');
     }
     assert.deepEqual(errors,[]);
-    console.log('Scheduler browser checks passed: preview/cancel/confirm, stale revisions, persisted opt-in/rollback, active-session guard, keyboard correction/quizzes, separated evidence, and mobile text sizes.');
+    console.log('Scheduler browser checks passed: preview/cancel/confirm, stale revisions, persisted opt-in/rollback, active-session guard, keyboard correction/quizzes, separated evidence, engine-specific help before/after switching and reload, and mobile text sizes.');
   } finally {
     if(browser) await browser.close();server.kill('SIGTERM');
     await new Promise(resolve=>{if(server.exitCode!==null)resolve();else server.once('exit',resolve);});
