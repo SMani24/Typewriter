@@ -1,8 +1,6 @@
 # Feature and Bug lists
 
 ## Features to Add
-1. The left green bar should be collapsable, it gets in the way of the essay studio and the space can be used better.
-2. 
 ## Bugs to Fix
 
 ## Requests

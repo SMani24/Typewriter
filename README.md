@@ -140,6 +140,9 @@ and writes a private report in `data/`.
 
 ## Essay studio
 
+Use the arrow beside the page title to collapse desktop navigation to an icon rail;
+the app remembers your choice. This gives the essay page more room.
+
 Open **Essay studio** for a quiet writing space with a title, prompt, word count,
 and automatic local saving. Your text stays exactly as typed: autocorrect and
 browser spelling services are disabled. Turn **Highlight possible spelling errors**

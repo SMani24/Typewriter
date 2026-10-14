@@ -14,8 +14,8 @@
   <script src="/static/app.js" defer></script>
 </head>
 <body>
-  <aside class="sidebar">
-    <a class="brand" href="#today"><span class="brand-mark">t<span>·</span></span><span>typewriter<span class="brand-sub">ONE WORD AT A TIME</span></span></a>
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="#today" aria-label="Typewriter — Today"><span class="brand-mark">t<span>·</span></span><span>typewriter<span class="brand-sub">ONE WORD AT A TIME</span></span></a>
     <div class="nav-caption">YOUR WORKSPACE</div>
     <nav aria-label="Main navigation">
       <button class="nav-item active" data-page="today"><span data-icon="sun"></span>Today<span class="nav-count" id="nav-due">0</span></button>
@@ -29,7 +29,7 @@
   </aside>
 
   <main>
-    <header class="topbar"><div><span class="eyebrow">YOUR SPELLING STUDIO</span><div id="page-title">Today</div></div><div class="topbar-right"><span id="pronunciation-check-note" class="small muted" hidden></span><span id="date-label"></span><button class="button primary compact" data-action="add"><span data-icon="plus"></span>Add words</button></div></header>
+    <header class="topbar"><div class="page-heading"><button id="sidebar-toggle" class="icon-button" aria-controls="sidebar" aria-expanded="true" aria-label="Collapse navigation" title="Collapse navigation"><span data-icon="arrow"></span></button><div><span class="eyebrow">YOUR SPELLING STUDIO</span><div id="page-title">Today</div></div></div><div class="topbar-right"><span id="pronunciation-check-note" class="small muted" hidden></span><span id="date-label"></span><button class="button primary compact" data-action="add"><span data-icon="plus"></span>Add words</button></div></header>
     <div id="loading" class="loading">Opening your notebook…</div>
     <div id="app-content" hidden>
       <section class="page" id="page-today">

@@ -1095,6 +1095,19 @@ $('#pronunciation-choice-dialog').addEventListener('cancel',()=>{pronunciationNo
 $('#failure-dialog').addEventListener('cancel',() => {pendingFailure=null;});
 $('#prompt-reevaluate').addEventListener('change',updatePromptCount);
 ['quiz_interval_mode','quiz_interval_fixed','quiz_interval_min','quiz_interval_max','meaning_enabled'].forEach(name => $('#settings-form').elements[name].addEventListener('input',event=>updateQuizRhythm(event.target)));
+function setSidebarCollapsed(collapsed) {
+  document.documentElement.classList.toggle('sidebar-collapsed',collapsed);
+  $('#sidebar-toggle').setAttribute('aria-expanded',String(!collapsed));
+  $('#sidebar-toggle').setAttribute('aria-label',collapsed?'Expand navigation':'Collapse navigation');
+  $('#sidebar-toggle').title=collapsed?'Expand navigation':'Collapse navigation';
+  $$('.nav-item').forEach(button=>{button.title=({today:'Today',words:'My words',essay:'Essay studio',progress:'Progress',settings:'Settings'})[button.dataset.page];});
+}
+try {setSidebarCollapsed(localStorage.getItem('typewriter-sidebar-collapsed')==='true');}catch {setSidebarCollapsed(false);}
+$('#sidebar-toggle').addEventListener('click',()=>{
+  const collapsed=!document.documentElement.classList.contains('sidebar-collapsed');
+  setSidebarCollapsed(collapsed);
+  try {localStorage.setItem('typewriter-sidebar-collapsed',String(collapsed));}catch { /* The current window still retains the layout choice. */ }
+});
 hydrateIcons();
 $('#date-label').textContent = new Date().toLocaleDateString(undefined,{weekday:'long',month:'short',day:'numeric'});
 guarded(async () => {await refresh();navigate(location.hash.slice(1) || 'today');});
