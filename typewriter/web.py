@@ -168,6 +168,30 @@ def create_app(data_dir=None, keys_path=None, background=True):
     def lookup():
         return jsonify(dictionary.lookup(body().get("word", "")))
 
+    @app.post("/api/practice-sessions")
+    def start_session():
+        return jsonify(store.start_session(body()))
+
+    @app.post("/api/practice-sessions/<session_id>/next")
+    def next_word(session_id):
+        return jsonify(store.session_next(session_id,body().get("position")))
+
+    @app.post("/api/practice-sessions/<session_id>/heartbeat")
+    def session_heartbeat(session_id):
+        return jsonify(store.session_touch(session_id))
+
+    @app.post("/api/practice-sessions/<session_id>/end")
+    def end_session(session_id):
+        return jsonify(store.session_touch(session_id,end=True))
+
+    @app.post("/api/scheduler/preview")
+    def scheduler_preview():
+        return jsonify(store.scheduler_preview(body().get("target")))
+
+    @app.post("/api/scheduler/switch")
+    def scheduler_switch():
+        return jsonify(store.scheduler_switch(body()))
+
     @app.put("/api/settings")
     def settings():
         result = store.save_settings(body())

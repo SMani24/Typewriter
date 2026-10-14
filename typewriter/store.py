@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from .models import normalize_model
+from .scheduling import SchedulingStore, card_for, save_card, engine, adapter, utc, Rating, CONFIG_ID
 
 DEFAULTS = {
     "proxy_enabled": False, "proxy_type": "socks5h", "proxy_host": "127.0.0.1",
@@ -19,7 +20,7 @@ DEFAULTS = {
     "meaning_enabled": True, "preparation_method": "api", "offline_batch_size": 20,
     "quiz_interval_mode": "fixed", "quiz_interval_min": 5, "quiz_interval_max": 5,
     "review_session_size": 10, "audio_volume": 100, "text_size": "default",
-    "pronunciation_accent": "uk",
+    "pronunciation_accent": "uk", "scheduler": "legacy",
     "autoplay_sentence": False, "autoplay_definition": False, "autoplay_audio": True,
     "autoplay_meaning": False, "autoplay_drill": False, "autoplay_correction": False,
 }
@@ -65,10 +66,21 @@ def validate_audio_urls(values):
     return values
 
 
-class Store:
+class Store(SchedulingStore):
     def __init__(self, path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.path.exists():
+            with sqlite3.connect(self.path) as source:
+                schema = source.execute("PRAGMA user_version").fetchone()[0]
+                if schema>2:
+                    raise ValueError("This notebook needs a newer Typewriter version.")
+                if schema<2:
+                    backups=self.path.parent/"backups"
+                    backups.mkdir(exist_ok=True)
+                    destination=backups/("before-scheduler-v2-"+datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")+".db")
+                    with sqlite3.connect(destination) as backup:
+                        source.backup(backup)
         with self.db() as db:
             db.executescript("""
                 PRAGMA journal_mode=WAL;
@@ -110,7 +122,7 @@ class Store:
                 if name not in columns:
                     db.execute(f"ALTER TABLE words ADD COLUMN {name} {definition}")
             columns = {r["name"] for r in db.execute("PRAGMA table_info(attempts)")}
-            for name, definition in {"exercise":"TEXT NOT NULL DEFAULT 'unknown'", "session_kind":"TEXT NOT NULL DEFAULT 'unknown'", "scheduler":"TEXT NOT NULL DEFAULT 'legacy'", "due_before":"TEXT NOT NULL DEFAULT ''", "stage_before":"INTEGER", "spaced_recall":"INTEGER NOT NULL DEFAULT 0", "evidence_version":"INTEGER NOT NULL DEFAULT 0"}.items():
+            for name, definition in {"exercise":"TEXT NOT NULL DEFAULT 'unknown'", "session_kind":"TEXT NOT NULL DEFAULT 'unknown'", "scheduler":"TEXT NOT NULL DEFAULT 'legacy'", "due_before":"TEXT NOT NULL DEFAULT ''", "stage_before":"INTEGER", "spaced_recall":"INTEGER NOT NULL DEFAULT 0", "evidence_version":"INTEGER NOT NULL DEFAULT 0", "legacy_advanced":"INTEGER NOT NULL DEFAULT 0", "fsrs_rating":"INTEGER NOT NULL DEFAULT 0", "scheduler_config":"TEXT NOT NULL DEFAULT ''"}.items():
                 if name not in columns:
                     db.execute(f"ALTER TABLE attempts ADD COLUMN {name} {definition}")
             if db.execute("PRAGMA user_version").fetchone()[0] < 1:
@@ -123,6 +135,8 @@ class Store:
                                 if value != row[field]:
                                     db.execute(f"UPDATE {table} SET {field}=? WHERE id=?", (value,row["id"]))
                 db.execute("PRAGMA user_version=1")
+            self.init_scheduling(db)
+            db.execute("PRAGMA user_version=2")
 
     @contextmanager
     def db(self):
@@ -145,6 +159,8 @@ class Store:
 
     def save_settings(self, data):
         values = self.settings(private=True)
+        if "scheduler" in data and data["scheduler"] != values["scheduler"]:
+            raise ValueError("Preview and confirm the scheduler change in Settings first.")
         for key in DEFAULTS:
             if key in data:
                 if key == "proxy_password" and data[key] == "" and not data.get("clear_proxy_password"):
@@ -228,6 +244,8 @@ class Store:
                 AND a.id=(SELECT MAX(b.id) FROM attempts b WHERE b.word_id=a.word_id AND b.mode='review' AND b.created>w.recall_reset_at)""")}
             results = {(r["word_id"], r["mode"], r["hinted"]): dict(r) for r in recent}
             timestamp = datetime.now(timezone.utc)
+            selected = engine(db)
+            fsrs = adapter()
             words = []
             for row in rows:
                 w = dict(row)
@@ -240,11 +258,19 @@ class Store:
                 w["audio_eligible"] = bool(w["audio_verified"] and not w["audio_flagged"] and (w["audio_file"] or selected_audio))
                 w["clue"] = blank_sentence(w["word"], w["sentence"]) if contains_word(w["word"], w["sentence"]) else ""
                 w["accuracy"] = round(100 * w["correct_reviews"] / w["reviews"]) if w["reviews"] else None
-                w["is_due"] = datetime.fromisoformat(w["due"]) <= timestamp
+                card = card_for(db,w)
+                w["legacy_due"] = w["due"]
+                w["fsrs_due"] = card.due.isoformat()
+                w["scheduler"] = selected
+                w["retrievability"] = fsrs.get_card_retrievability(card,current_datetime=timestamp) if card.last_review else None
+                w["fsrs_state"] = card.state.name
+                if selected == "fsrs":
+                    w["due"] = w["fsrs_due"]
+                w["is_due"] = utc(w["due"]) <= timestamp
                 w["state"] = "New" if not w["reviews"] else ("Confident" if w["stage"] >= 3 else "Learning")
+                if selected == "fsrs":
+                    w["state"] = "New" if card.last_review is None else "Learning" if card.state.name != "Review" else "Reviewing"
                 recall = results.get((w["id"], "review", 0), {})
-                assisted = results.get((w["id"], "review", 1), {})
-                latest = max((recall, assisted), key=lambda r: r.get("last_id", 0))
                 meanings = results.get((w["id"], "meaning", 0), {})
                 w["recent_reviews"] = recall.get("total", 0)
                 w["recent_accuracy"] = round(100 * recall["correct"] / recall["total"]) if recall else None
@@ -291,6 +317,8 @@ class Store:
                 sources = json.dumps({k: "manual" for k in ["definition", "sentence", "tip"] if item[k]})
                 status = "ready" if item["definition"] and item["sentence"] and item["tip"] else "pending"
                 cur = db.execute("INSERT INTO words (word,definition,sentence,tip,tag,sources,created,updated,due,status) VALUES (?,?,?,?,?,?,?,?,?,?)", (*fields, sources, stamp, stamp, stamp, status))
+                word = db.execute("SELECT * FROM words WHERE id=?",(cur.lastrowid,)).fetchone()
+                save_card(db,card_for(db,word))
                 added.append(cur.lastrowid)
         return {"added": added, "duplicates": duplicates}
 
@@ -335,8 +363,12 @@ class Store:
                 db.execute("UPDATE words SET meaning_flagged=0,distractors='[]' WHERE id=?", (word_id,))
             if renamed:
                 stamp = now()
+                db.execute("DELETE FROM spelling_schedules WHERE word_id=?",(word_id,))
                 # Retain the answer history, but start learning the corrected target afresh.
                 db.execute("UPDATE words SET stage=0,due=?,recall_reset_at=?,audio_url='',audio_urls='{}',audio_verified=0,audio_flagged=1,pronunciation_accent='',distractors='[]',drill_completed_at='' WHERE id=?", (stamp,stamp,word_id))
+                reset=db.execute("SELECT * FROM words WHERE id=?",(word_id,)).fetchone()
+                cursor=db.execute("SELECT COALESCE(MAX(id),0) FROM attempts WHERE word_id=?",(word_id,)).fetchone()[0]
+                save_card(db,card_for(db,reset),cursor)
         if (audio != original["audio_url"] or audio_urls != original["audio_urls"]) and not original["audio_file"]:
             with self.db() as db:
                 db.execute("UPDATE words SET audio_verified=0 WHERE id=?", (word_id,))
@@ -448,8 +480,19 @@ class Store:
         elapsed = data.get("elapsed_ms", 0)
         if not isinstance(elapsed, int) or not 0 <= elapsed <= 86400000:
             raise ValueError("Invalid answer time.")
+        request_id=data.get("request_id")
+        if request_id is not None and (not isinstance(request_id,str) or not re.fullmatch(r"[a-zA-Z0-9-]{1,80}",request_id) or not isinstance(data.get("session_id"),str)):
+            raise ValueError("Invalid answer request ID.")
+        fingerprint=hashlib.sha256(json.dumps([word_id,answer,mode,data.get("hinted",False),metadata["exercise"],metadata["session_kind"],data.get("version")],sort_keys=True).encode()).hexdigest()
         stamp = now()
         with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if request_id:
+                saved=db.execute("SELECT * FROM practice_answers WHERE session_id=? AND request_id=?",(data["session_id"],request_id)).fetchone()
+                if saved:
+                    if saved["fingerprint"]!=fingerprint:
+                        raise ValueError("Your previous answer was already saved. Restart this question before changing it.")
+                    return {**json.loads(saved["response"]),"word":self.word(word_id)}
             row = db.execute("SELECT * FROM words WHERE id=?", (word_id,)).fetchone()
             if not row:
                 raise KeyError("Word not found.")
@@ -474,36 +517,55 @@ class Store:
             hinted = data.get("hinted", False)
             recorded_answer = choice["definition"][:200] if mode == "meaning" else answer.strip()
             at = datetime.fromisoformat(stamp).astimezone(timezone.utc)
-            due = datetime.fromisoformat(row["due"]).astimezone(timezone.utc)
+            selected = self.validate_session_answer(db,data,row,metadata,at)
+            card = card_for(db,row)
+            legacy_due = utc(row["due"])
+            due = legacy_due if selected == "legacy" else card.due
             actually_due = due <= at
             known = metadata["session_kind"] in ("normal","selected","endless") and metadata["exercise"] in ("sentence","definition","audio")
             day = at.date().isoformat()
             prior_spaced = db.execute("SELECT 1 FROM attempts WHERE word_id=? AND created>? AND spaced_recall=1 AND substr(created,1,10)=?", (word_id,row["recall_reset_at"],day)).fetchone()
             spaced = mode == "review" and not hinted and actually_due and known and not prior_spaced
-            attempt_id = db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created,exercise,session_kind,scheduler,due_before,stage_before,spaced_recall,evidence_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (word_id, recorded_answer, int(correct), mode, int(hinted), elapsed, stamp,metadata["exercise"],metadata["session_kind"],"legacy",row["due"],row["stage"],int(spaced),1)).lastrowid
+            attempt_id = db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created,exercise,session_kind,scheduler,due_before,stage_before,spaced_recall,evidence_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (word_id, recorded_answer, int(correct), mode, int(hinted), elapsed, stamp,metadata["exercise"],metadata["session_kind"],selected,due.isoformat(),row["stage"],int(spaced),1)).lastrowid
             if mode == "review":
                 stage = row["stage"]
                 if correct and not hinted:
-                    last = db.execute("SELECT created FROM attempts WHERE word_id=? AND id<? AND created>? AND mode='review' AND correct=1 AND hinted=0 ORDER BY id DESC LIMIT 1", (word_id,attempt_id,row["recall_reset_at"])).fetchone()
+                    last = db.execute("SELECT created FROM attempts WHERE word_id=? AND id<? AND created>? AND mode='review' AND correct=1 AND hinted=0 AND (legacy_advanced=1 OR evidence_version=0) ORDER BY id DESC LIMIT 1", (word_id,attempt_id,row["recall_reset_at"])).fetchone()
                     same_day = last and datetime.fromisoformat(last["created"]).astimezone(timezone.utc).date() == at.date()
                     # Extra successes are saved as practice, without moving Legacy dates.
-                    if actually_due and not same_day:
+                    if actually_due and legacy_due <= at and not same_day:
                         stage = min(stage + 1, 5)
+                        db.execute("UPDATE attempts SET legacy_advanced=1 WHERE id=?",(attempt_id,))
                         due = at + timedelta(days=[1,1,3,7,14,30][stage])
                         db.execute("UPDATE words SET stage=?,due=? WHERE id=?", (stage,due.isoformat(),word_id))
                 else:
                     stage = max(0,stage-1)
                     due = at + timedelta(minutes=10)
                     db.execute("UPDATE words SET stage=?,due=?,drill_completed_at='' WHERE id=?", (stage,due.isoformat(),word_id))
-        return {"attempt_id": attempt_id, "correct": correct, "expected": row["definition"] if mode == "meaning" else row["word"], "answer": answer.strip(), "tip": row["tip"], "word": self.word(word_id)}
+            # Both states observe the event. Only qualified, active-due spelling
+            # evidence updates FSRS; practice still advances the processing cursor.
+            if mode == "review" and known and actually_due:
+                rating=Rating.Good if correct and not hinted else Rating.Again
+                card, _ = adapter().review_card(card,rating,review_datetime=at,review_duration=elapsed)
+                db.execute("UPDATE attempts SET fsrs_rating=? WHERE id=?",(int(rating),attempt_id))
+            db.execute("UPDATE attempts SET scheduler_config=? WHERE id=?",(CONFIG_ID,attempt_id))
+            save_card(db,card,attempt_id)
+            response={"attempt_id":attempt_id,"correct":correct,"expected":row["definition"] if mode=="meaning" else row["word"],"answer":answer.strip(),"tip":row["tip"]}
+            if request_id:
+                db.execute("INSERT INTO practice_answers VALUES (?,?,?,?)",(data["session_id"],request_id,fingerprint,json.dumps(response)))
+        return {**response,"word":self.word(word_id)}
 
     @staticmethod
     def validate_attempt_metadata(data):
-        result = {"exercise":data.get("exercise","unknown"), "session_kind":data.get("session_kind","unknown"), "scheduler":data.get("scheduler","legacy"), "due_before":data.get("due_before",""), "stage_before":data.get("stage_before"), "spaced_recall":data.get("spaced_recall",0), "evidence_version":data.get("evidence_version",0)}
-        if result["exercise"] not in ("unknown","sentence","definition","audio","meaning","drill") or result["session_kind"] not in ("unknown","normal","selected","endless","drill") or result["scheduler"] != "legacy":
+        result = {"exercise":data.get("exercise","unknown"), "session_kind":data.get("session_kind","unknown"), "scheduler":data.get("scheduler","legacy"), "due_before":data.get("due_before",""), "stage_before":data.get("stage_before"), "spaced_recall":data.get("spaced_recall",0), "evidence_version":data.get("evidence_version",0), "legacy_advanced":data.get("legacy_advanced",0), "fsrs_rating":data.get("fsrs_rating",0), "scheduler_config":data.get("scheduler_config", "")}
+        if result["exercise"] not in ("unknown","sentence","definition","audio","meaning","drill") or result["session_kind"] not in ("unknown","normal","selected","endless","drill") or result["scheduler"] not in ("legacy","fsrs"):
             raise ValueError("Invalid practice context.")
         if type(result["spaced_recall"]) is not int or result["spaced_recall"] not in (0,1) or type(result["evidence_version"]) is not int or result["evidence_version"] not in (0,1) or result["spaced_recall"] and (result["evidence_version"] != 1 or data.get("mode") != "review" or data.get("hinted",False)):
             raise ValueError("Invalid spaced recall evidence.")
+        if type(result["legacy_advanced"]) is not int or result["legacy_advanced"] not in (0,1) or type(result["fsrs_rating"]) is not int or result["fsrs_rating"] not in (0,1,3) or result["scheduler_config"] not in ("",CONFIG_ID):
+            raise ValueError("Invalid scheduler event metadata.")
+        if (result["legacy_advanced"] or result["fsrs_rating"]) and data.get("mode") != "review":
+            raise ValueError("Only spelling reviews can update a scheduler.")
         mode = data.get("mode")
         if mode == "drill" and (result["exercise"] not in ("unknown","drill") or result["session_kind"] not in ("unknown","drill")) or mode == "meaning" and result["exercise"] not in ("unknown","meaning") or mode in ("review","correction") and result["exercise"] not in ("unknown","sentence","definition","audio") or mode in ("review","correction","meaning") and result["session_kind"] == "drill":
             raise ValueError("Exercise context does not match the practice mode.")
@@ -587,15 +649,16 @@ class Store:
         with self.db() as db:
             words = [dict(r) for r in db.execute("SELECT * FROM words")]
             attempts = [dict(r) for r in db.execute("SELECT * FROM attempts")]
+            scheduling = self.export_scheduling(db,words)
         for word in words:
             word["distractors"] = json.loads(word["distractors"])
             word["audio_urls"] = json.loads(word["audio_urls"])
-        return {"format": "typewriter", "version": 1, "attempt_metadata_version":1, "exported": now(), "words": words, "attempts": attempts, "essay": self.essay()}
+        return {"format": "typewriter", "version": 2, "attempt_metadata_version":2, "scheduling":scheduling, "exported": now(), "words": words, "attempts": attempts, "essay": self.essay()}
 
     def import_backup(self, data):
-        if not isinstance(data, dict) or data.get("format") != "typewriter" or data.get("version") != 1:
+        if not isinstance(data, dict) or data.get("format") != "typewriter" or data.get("version") not in (1,2):
             raise ValueError("Choose a Typewriter backup file.")
-        if data.get("attempt_metadata_version",1) != 1:
+        if data.get("attempt_metadata_version",1) not in (1,2):
             raise ValueError("This backup uses a newer practice-context format. Update Typewriter before importing it.")
         words, attempts = data.get("words"), data.get("attempts")
         essay = self.validate_essay(data["essay"]) if "essay" in data else None
@@ -657,8 +720,14 @@ class Store:
             except (ValueError, KeyError, TypeError):
                 raise ValueError("Invalid practice dates.") from None
             normalized_attempts.append({**a, **self.validate_attempt_metadata(a), "created":datetime.fromisoformat(a["created"]).astimezone(timezone.utc).isoformat()})
+        scheduling = self.validate_scheduling(data.get("scheduling"),words,attempts) if data["version"]==2 else None
         added, id_map, essay_imported = 0, {}, False
+        attempt_map = {}
         with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if self.active_sessions(db,datetime.now(timezone.utc)):
+                raise ValueError("End your practice session before importing a backup.")
+            full = not db.execute("SELECT 1 FROM words LIMIT 1").fetchone()
             for original, item in validated:
                 existing = db.execute("SELECT id FROM words WHERE word=?", (item["word"],)).fetchone()
                 if existing:
@@ -675,7 +744,15 @@ class Store:
                 added += 1
             for a in normalized_attempts:
                 if a["word_id"] in id_map:
-                    db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created,exercise,session_kind,scheduler,due_before,stage_before,spaced_recall,evidence_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (id_map[a["word_id"]], a["answer"], a["correct"], a["mode"], a["hinted"], a["elapsed_ms"], a["created"],a["exercise"],a["session_kind"],a["scheduler"],a["due_before"],a["stage_before"],a["spaced_recall"],a["evidence_version"]))
+                    imported = db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created,exercise,session_kind,scheduler,due_before,stage_before,spaced_recall,evidence_version,legacy_advanced,fsrs_rating,scheduler_config) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (id_map[a["word_id"]], a["answer"], a["correct"], a["mode"], a["hinted"], a["elapsed_ms"], a["created"],a["exercise"],a["session_kind"],a["scheduler"],a["due_before"],a["stage_before"],a["spaced_recall"],a["evidence_version"],a["legacy_advanced"],a["fsrs_rating"],a["scheduler_config"]))
+                    if "id" in a:
+                        attempt_map[a["id"]] = imported.lastrowid
+            self.restore_scheduling(db,scheduling,id_map,attempt_map,full)
+            if not scheduling:
+                for word_id in id_map.values():
+                    word=db.execute("SELECT * FROM words WHERE id=?",(word_id,)).fetchone()
+                    cursor=db.execute("SELECT COALESCE(MAX(id),0) FROM attempts WHERE word_id=?",(word_id,)).fetchone()[0]
+                    save_card(db,card_for(db,word),cursor)
             if essay and any(essay[k] for k in ("title","prompt","body")):
                 current = db.execute("SELECT * FROM essay WHERE id=1").fetchone()
                 if not current or not any(current[k] for k in ("title","prompt","body")):

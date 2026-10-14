@@ -49,13 +49,13 @@ class Lab:
         due_before = self.due(word_id)
         event = {'word_id':word_id,'at':at.isoformat(),'correct':correct,'hinted':hinted,
                  'mode':mode,'context':context,'exercise':exercise,'active':self.active}
-        # Baseline Legacy faithfully consumes all spelling reviews, including extras.
+        # Legacy comparator follows the approved due-only success policy.
         if mode=='review':
             if correct and not hinted:
-                if word['last_success_day'] != at.date().isoformat():
+                if due_before<=at and word['due']<=at and word['last_success_day'] != at.date().isoformat():
                     word['stage']=min(5,word['stage']+1)
-                word['last_success_day']=at.date().isoformat()
-                word['due']=at+timedelta(days=[1,1,3,7,14,30][word['stage']])
+                    word['last_success_day']=at.date().isoformat()
+                    word['due']=at+timedelta(days=[1,1,3,7,14,30][word['stage']])
             else:
                 word['stage']=max(0,word['stage']-1)
                 word['due']=at+timedelta(minutes=10)

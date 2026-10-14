@@ -1,3 +1,4 @@
 Flask>=3.1,<4
 requests[socks]>=2.32,<3
 beautifulsoup4>=4.13,<5
+fsrs==6.3.2
