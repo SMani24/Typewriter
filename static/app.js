@@ -170,9 +170,9 @@ function render() {
   if (currentPage !== 'settings') {$$('audio').forEach(audio=>audio.volume = (state.settings.audio_volume ?? 100) / 100);}
 }
 function renderDrillSuggestions() {
-  const words = state.words.filter(w=>w.drill_recommended).sort(TypewriterReview.comparePriority).slice(0,3);
+  const words = state.words.filter(w=>w.drill_recommended).sort(TypewriterReview.compareDrillPriority).slice(0,3);
   $('#drill-suggestions').hidden = !words.length || !state.settings.drill_enabled;
-  $('#drill-suggestions').innerHTML = `<span class="eyebrow">WORTH A DRILL</span>${words.map(w=>`<button class="drill-suggestion" data-drill="${w.id}"><span>${escapeHtml(w.word)}<small>${w.recent_mistakes} misses in ${w.recent_reviews} recent reviews</small></span>${icon('arrow')}</button>`).join('')}<p class="field-note">Suggestions clear after three consecutive correct unaided reviews. Drills and corrections don’t count as recall.</p>`;
+  $('#drill-suggestions').innerHTML = `<span class="eyebrow">WORTH A DRILL</span>${words.map(w=>`<button class="drill-suggestion" data-drill="${w.id}"><span>${escapeHtml(w.word)}<small>${w.recent_mistakes} misses in ${w.recent_reviews} recent reviews${w.drill_cooling ? ' · Recently drilled' : ''}</small></span>${icon('arrow')}</button>`).join('')}<p class="field-note">A drill with 10+ correct repetitions and at least 80% accuracy lowers its drill priority by 75% for 24 hours. A missed or hinted spelling review restores full priority. Three consecutive correct unaided reviews clear the suggestion.</p>`;
 }
 function visibleWords() {
   const query = $('#word-search').value.toLowerCase().trim();
@@ -354,6 +354,10 @@ async function saveWord(event) {
       const types = exerciseTypes(updated,practice.quizSettings || state.settings);
       let exercise = currentWord().exercise;
       if (practice.mode !== 'drill' && !types.includes(exercise)) exercise = types.find(t=>t!=='meaning') || types[0];
+      if (practice.mode === 'drill' && updated.word !== currentWord().word) {
+        practice.firstDrillAttempt = practice.lastDrillAttempt = null;
+        practice.attempts = practice.correct = 0;
+      }
       Object.assign(currentWord(),updated,{exercise,spellingRecorded:false});
       practice.correction = false;
       if (practice.mode === 'drill' || exercise) renderPractice();else await advancePractice();
@@ -397,7 +401,7 @@ function showDrillOptions(open) {
 }
 function filterDrillWords() {
   const query = $('#drill-search').value.trim().toLowerCase();
-  drillMatches = state.words.filter(w => w.word.includes(query)).sort((a,b) => Number(b.word.startsWith(query)) - Number(a.word.startsWith(query)) || TypewriterReview.comparePriority(a,b));
+  drillMatches = state.words.filter(w => w.word.includes(query)).sort((a,b) => Number(b.word.startsWith(query)) - Number(a.word.startsWith(query)) || TypewriterReview.compareDrillPriority(a,b));
   drillHighlight = Math.max(0, drillMatches.findIndex(w => w.word === query));
   $('#drill-word').value = drillMatches.find(w => w.word === query)?.id || '';
   showDrillOptions(true);
@@ -405,7 +409,7 @@ function filterDrillWords() {
 }
 function renderDrillOptions() {
   const input = $('#drill-search'), word = drillMatches[drillHighlight];
-  $('#drill-options').innerHTML = drillMatches.length ? drillMatches.map((w,i) => `<div id="drill-option-${w.id}" role="option" aria-selected="${i === drillHighlight}" data-drill-option="${i}" class="word-option ${i === drillHighlight ? 'active' : ''}">${escapeHtml(w.word)}${w.drill_recommended ? '<small>Suggested · '+w.recent_mistakes+' misses</small>' : w.tag ? `<small>${escapeHtml(w.tag)}</small>` : ''}</div>`).join('') : '<div class="no-word-options">No matching words</div>';
+  $('#drill-options').innerHTML = drillMatches.length ? drillMatches.map((w,i) => `<div id="drill-option-${w.id}" role="option" aria-selected="${i === drillHighlight}" data-drill-option="${i}" class="word-option ${i === drillHighlight ? 'active' : ''}">${escapeHtml(w.word)}${w.drill_recommended || w.drill_cooling ? '<small>'+[w.drill_recommended ? 'Suggested · '+w.recent_mistakes+' misses' : '',w.drill_cooling ? 'Recently drilled' : ''].filter(Boolean).join(' · ')+'</small>' : w.tag ? `<small>${escapeHtml(w.tag)}</small>` : ''}</div>`).join('') : '<div class="no-word-options">No matching words</div>';
   if (word && !$('#drill-options').hidden) input.setAttribute('aria-activedescendant', `drill-option-${word.id}`);
   else input.removeAttribute('aria-activedescendant');
   const typed = input.value;
@@ -466,7 +470,7 @@ function startDrill(event) {
   const word = state.words.find(w => w.id === Number($('#drill-word').value));
   if (!word || !state.settings.drill_enabled) return;
   $('#drill-dialog').close();
-  practice = {mode:'drill',queue:[word],index:0,attempts:0,correct:0,hinted:false,feedback:false,correction:false,started:Date.now(),repetitions:0,target:Number($('#drill-target').value),show:$('#drill-show').checked};
+  practice = {mode:'drill',queue:[word],index:0,attempts:0,correct:0,hinted:false,feedback:false,correction:false,started:Date.now(),repetitions:0,firstDrillAttempt:null,lastDrillAttempt:null,target:Number($('#drill-target').value),show:$('#drill-show').checked};
   openPractice();
 }
 function openPractice() {
@@ -585,6 +589,10 @@ async function answerSubmit(event) {
       throw error;
     }
     if (practice !== session || !$('#practice-dialog').open || $('#practice-active').hidden) return;
+    if (mode === 'drill') {
+      practice.firstDrillAttempt ??= result.attempt_id;
+      practice.lastDrillAttempt = result.attempt_id;
+    }
     const savedWord = state.words.find(w=>w.id===word.id);
     if (savedWord) Object.assign(savedWord,result.word);
     if (mode === 'review') TypewriterReview.recordSpelling(practice,word);
@@ -602,9 +610,10 @@ async function answerSubmit(event) {
       button.classList.toggle('choice-incorrect',String(practice.choices[i].id) === String(practice.choice) && !result.correct);
     });
     $('#answer-submit').innerHTML = (practice.mode === 'drill' ? 'Type it again' : result.correct && TypewriterReview.quizDue(practice) && !meaning ? 'Meaning quiz' : result.correct || meaning ? (!practice.endless && practice.index + 1 >= practice.queue.length ? 'See my session' : 'Next word') : 'Practise the correction') + '<span class="enter-key" aria-hidden="true">Enter ↵</span>';
-    if (practice.mode === 'drill' && practice.target && practice.correct >= practice.target) {finishPractice();}
+    if (practice.mode === 'drill' && practice.target && practice.correct >= practice.target) {finishPractice(true);}
   },$('#answer-submit'));
   answerBusy = false;
+  if (practice === session && practice.endRequested) {finishPractice();return;}
   if (practice === session && $('#practice-dialog').open) {
     $('#answer-form').setAttribute('aria-busy','false');
     if (!practice.feedback && !$('#practice-active').hidden) {
@@ -612,7 +621,7 @@ async function answerSubmit(event) {
       $('#answer-submit').hidden = meaning;
       $('#answer-submit').innerHTML = 'Check spelling' + icon('arrow');
     }
-    if (!$('#practice-summary').hidden) $('#practice-summary button').focus();
+    if (!$('#practice-summary').hidden) $('#practice-summary [data-action="close-practice"]').focus();
     else if (practice.feedback) $('#answer-submit').focus();
     else if (meaning) $('.meaning-choice.selected, .meaning-choice')?.focus();
     else $('#answer').focus();
@@ -641,6 +650,7 @@ async function advancePractice() {
     }
   } finally {
     answerBusy = false;button.disabled = false;
+    if (practice === session && session.endRequested) finishPractice();
     if (practice === session && $('#practice-dialog').open && !$('#practice-active').hidden) {
       if (session.feedback) button.focus();
       else if (currentWord().exercise === 'meaning') $('.meaning-choice')?.focus();
@@ -648,15 +658,34 @@ async function advancePractice() {
     }
   }
 }
-function finishPractice() {
+function finishPractice(answerSaved = false) {
   stopPronunciation();
   if (!practice) return;
+  if (answerBusy && !answerSaved) {practice.endRequested = true;$('#playback-status').textContent = 'Finishing your current answer…';return;}
+  practice.endRequested = false;
   const p = practice, minutes = Math.max(1,Math.round((Date.now()-p.started)/60000));
   $('#practice-active').hidden = true; $('#practice-summary').hidden = false;
   $('#practice-meter-fill').style.width = '100%';
-  $('#practice-summary').innerHTML = `<div class="practice-summary"><div class="summary-mark">✳</div><span class="eyebrow">A LITTLE PROGRESS, MADE</span><h2>${p.mode === 'drill' ? 'A word, a little more familiar.' : 'You showed up for your words.'}</h2><p>${p.mode === 'drill' ? 'Your repetitions are saved. Come back later to check what you remember.' : 'Your answers are saved. Meaning scores and spelling recall are tracked separately.'}</p><div class="summary-stats"><div><strong>${p.attempts}</strong><span>${p.mode === 'drill' ? 'repetitions' : 'answers checked'}</span></div><div><strong>${p.correct}</strong><span>correct answers</span></div><div><strong>${minutes}</strong><span>minutes of focus</span></div></div><button class="button primary" data-action="close-practice">Back to my notebook${icon('arrow')}</button></div>`;
-  $('#practice-summary button').focus();
-  guarded(refresh);
+  $('#practice-summary').innerHTML = `<div class="practice-summary"><div class="summary-mark">✳</div><span class="eyebrow">A LITTLE PROGRESS, MADE</span><h2>${p.mode === 'drill' ? 'A word, a little more familiar.' : 'You showed up for your words.'}</h2><p>${p.mode === 'drill' ? 'Your repetitions are saved. Come back later to check what you remember.' : 'Your answers are saved. Meaning scores and spelling recall are tracked separately.'}</p><p id="drill-result-note" class="field-note" role="status"></p><button class="text-button" data-action="retry-drill-completion" hidden>Retry priority update</button><div class="summary-stats"><div><strong>${p.attempts}</strong><span>${p.mode === 'drill' ? 'repetitions' : 'answers checked'}</span></div><div><strong>${p.correct}</strong><span>correct answers</span></div><div><strong>${minutes}</strong><span>minutes of focus</span></div></div><button class="button primary" data-action="close-practice">Back to my notebook${icon('arrow')}</button></div>`;
+  $('#practice-summary [data-action="close-practice"]').focus();
+  if (p.mode === 'drill' && p.firstDrillAttempt) guarded(()=>saveDrillCompletion(p));else guarded(refresh);
+}
+async function saveDrillCompletion(session) {
+  if (session.completionBusy) return;
+  session.completionBusy = true;
+  const visible = () => practice === session && !$('#practice-summary').hidden;
+  if (visible()) {$('#drill-result-note').textContent = 'Updating drill priority…';$('[data-action="retry-drill-completion"]').hidden = true;}
+  try {
+    const result = await api(`/words/${session.queue[0].id}/drill-completion`,'POST',{first_attempt_id:session.firstDrillAttempt,last_attempt_id:session.lastDrillAttempt,version:session.queue[0].version});
+    if (visible()) {
+      const until = result.word.drill_cooldown_until ? new Date(result.word.drill_cooldown_until).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '';
+      $('#drill-result-note').textContent = result.word.drill_cooling ? result.qualifies ? `Recently drilled · Drill priority is 75% lower until ${until}. Reviews still follow your recall results.` : `Recently drilled · Your existing priority reduction ends ${until}. This drill did not extend it.` : result.qualifies ? 'Drill saved. Full drill priority is active; reductions expire after 24 hours or a later spelling-review struggle.' : 'Drill saved. To lower its priority next time, finish with 10+ correct repetitions and at least 80% accuracy.';
+    }
+    await refresh();
+  } catch(error) {
+    if (visible()) {$('#drill-result-note').textContent = 'Your repetitions are saved, but drill priority could not be updated. '+error.message;$('[data-action="retry-drill-completion"]').hidden = false;}
+    else throw error;
+  } finally {session.completionBusy = false;}
 }
 function pronunciationUrl(word, preview = false) {
   return `/api/words/${word.id}/audio?accent=${word.pronunciation_accent || state.settings.pronunciation_accent || 'uk'}&v=${word.audio_revision || word.version || 0}${preview ? '&preview=1' : ''}`;
@@ -805,7 +834,7 @@ async function flagMeaning(id, flagged) {
       }
     }
     toast(flagged ? 'Meaning flagged. Prepare the queued word to correct it.' : 'Meaning flag cleared.');
-  } finally {if (locksPractice) answerBusy = false;}
+  } finally {if (locksPractice) {answerBusy = false;if (practice?.endRequested) finishPractice();}}
 }
 
 function openPreparation(ids, reEvaluate = false) {
@@ -962,6 +991,7 @@ const actions = {
   'restore-audio':() => changeWordAudio({flagged:false,verified:false}),
   'remove-audio':removeUploadedAudio, 'flag-practice-audio':flagPracticeAudio,
   'skip-audio':skipAudio,
+  'retry-drill-completion':()=>{if (practice?.mode === 'drill') return saveDrillCompletion(practice);},
   'finish-practice':() => {if ($('#practice-summary').hidden) finishPractice();else actions['close-practice']();},
   'close-practice':() => {stopPronunciation();$('#practice-dialog').close();practice = null;},
 };
@@ -1015,6 +1045,14 @@ $('#drill-options').addEventListener('mousedown',event => {
 });
 $('#drill-toggle').addEventListener('click',() => {const open = $('#drill-options').hidden;$('#drill-search').focus();if (open) filterDrillWords();else showDrillOptions(false);});
 $('#drill-search').addEventListener('blur',() => {showDrillOptions(false);$('#drill-completion').textContent = '';});
+// Keep Escape responsive even while the answer input is disabled for saving.
+document.addEventListener('keydown',event=>{
+  if (event.key !== 'Escape' || event.isComposing || event.repeat || !$('#practice-dialog').open) return;
+  const modal = document.activeElement?.closest('dialog[open]') || (focusedModal?.open ? focusedModal : null);
+  if (modal?.id !== 'practice-dialog') return;
+  event.preventDefault();
+  if ($('#practice-summary').hidden) finishPractice();else actions['close-practice']();
+});
 $('#practice-dialog').addEventListener('keydown',event => {
   if (event.isComposing || $('#practice-active').hidden) return;
   if (event.altKey && event.code === 'KeyP') {event.preventDefault();if (!event.repeat) guarded(() => listen());return;}

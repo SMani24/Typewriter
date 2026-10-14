@@ -113,6 +113,10 @@ def create_app(data_dir=None, keys_path=None, background=True):
     def attempt(word_id):
         return jsonify(store.attempt(word_id, body()))
 
+    @app.post("/api/words/<int:word_id>/drill-completion")
+    def complete_drill(word_id):
+        return jsonify(store.complete_drill(word_id, body()))
+
     @app.get("/api/words/<int:word_id>/audio")
     def audio(word_id):
         return send_file(dictionary.audio(word_id, preview=request.args.get("preview") == "1", accent=request.args.get("accent")), max_age=86400 if request.args.get("v") else 0)

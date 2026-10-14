@@ -95,3 +95,9 @@ const ranked=[{id:1,review_priority:5.6,recent_mistakes:8,due:'2026-01-10'},
   {id:2,review_priority:6,recent_mistakes:2,due:'2026-01-01'},
   {id:3,review_priority:6,recent_mistakes:2,due:'2026-01-02'}].sort(rules.comparePriority);
 assert.deepEqual(ranked.map(w=>w.id),[2,3,1]);
+
+// Drill relief changes drill order without affecting spelling review order.
+const drilled={id:1,due:'2026-01-01',review_priority:6,drill_priority:1.5};
+const waiting={id:2,due:'2026-01-02',review_priority:4,drill_priority:4};
+assert.deepEqual([drilled,waiting].sort(rules.compareDrillPriority).map(w=>w.id),[2,1]);
+assert.deepEqual([drilled,waiting].sort(rules.comparePriority).map(w=>w.id),[1,2]);

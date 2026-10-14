@@ -7,4 +7,3 @@
 ## Bugs to Fix
 
 ## Requests
-1. When a drill is done for one word that word should have less priority in the drill queue (but how we should determine this and if we should remove it completely or not has room to think about)

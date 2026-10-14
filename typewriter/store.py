@@ -100,7 +100,7 @@ class Store:
                 );
             """)
             columns = {r["name"] for r in db.execute("PRAGMA table_info(words)")}
-            for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''", "meaning_flagged": "INTEGER NOT NULL DEFAULT 0", "distractors": "TEXT NOT NULL DEFAULT '[]'", "audio_urls": "TEXT NOT NULL DEFAULT '{}'", "pronunciation_accent": "TEXT NOT NULL DEFAULT ''", "recall_reset_at": "TEXT NOT NULL DEFAULT ''"}.items():
+            for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''", "meaning_flagged": "INTEGER NOT NULL DEFAULT 0", "distractors": "TEXT NOT NULL DEFAULT '[]'", "audio_urls": "TEXT NOT NULL DEFAULT '{}'", "pronunciation_accent": "TEXT NOT NULL DEFAULT ''", "recall_reset_at": "TEXT NOT NULL DEFAULT ''", "drill_completed_at": "TEXT NOT NULL DEFAULT ''"}.items():
                 if name not in columns:
                     db.execute(f"ALTER TABLE words ADD COLUMN {name} {definition}")
 
@@ -227,6 +227,10 @@ class Store:
                 w["drill_recommended"] = w["recent_mistakes"] >= 2 and (w["recall_streak"] < 3 or w["needs_help"])
                 overdue = max(0, (timestamp - datetime.fromisoformat(w["due"])).total_seconds() / 86400)
                 w["review_priority"] = self.practice_priority(recall, w["needs_help"], overdue)
+                completed = datetime.fromisoformat(w["drill_completed_at"]) if w["drill_completed_at"] else None
+                w["drill_cooling"] = bool(completed and 0 <= (timestamp-completed).total_seconds() < 86400)
+                w["drill_cooldown_until"] = (completed+timedelta(days=1)).isoformat() if w["drill_cooling"] else None
+                w["drill_priority"] = w["review_priority"] * (0.25 if w["drill_cooling"] else 1)
                 meaning_age = max(0, (timestamp - datetime.fromisoformat(meanings["last_created"])).total_seconds() / 86400) if meanings else 0
                 w["meaning_priority"] = self.practice_priority(meanings, bool(meanings and not meanings["last_correct"]), meaning_age)
                 words.append(w)
@@ -302,7 +306,7 @@ class Store:
             if renamed:
                 stamp = now()
                 # Retain the answer history, but start learning the corrected target afresh.
-                db.execute("UPDATE words SET stage=0,due=?,recall_reset_at=?,audio_url='',audio_urls='{}',audio_verified=0,audio_flagged=1,pronunciation_accent='',distractors='[]' WHERE id=?", (stamp,stamp,word_id))
+                db.execute("UPDATE words SET stage=0,due=?,recall_reset_at=?,audio_url='',audio_urls='{}',audio_verified=0,audio_flagged=1,pronunciation_accent='',distractors='[]',drill_completed_at='' WHERE id=?", (stamp,stamp,word_id))
         if (audio != original["audio_url"] or audio_urls != original["audio_urls"]) and not original["audio_file"]:
             with self.db() as db:
                 db.execute("UPDATE words SET audio_verified=0 WHERE id=?", (word_id,))
@@ -438,7 +442,7 @@ class Store:
                 correct = normalize_answer(answer) == row["word"]
             hinted = data.get("hinted", False)
             recorded_answer = choice["definition"][:200] if mode == "meaning" else answer.strip()
-            db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created) VALUES (?,?,?,?,?,?,?)", (word_id, recorded_answer, int(correct), mode, int(hinted), elapsed, stamp))
+            attempt_id = db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created) VALUES (?,?,?,?,?,?,?)", (word_id, recorded_answer, int(correct), mode, int(hinted), elapsed, stamp)).lastrowid
             # Drilling, hints and corrections never move a word into a confident state.
             # Only one successful promotion per UTC day, even across repeat sessions.
             if mode == "review":
@@ -451,9 +455,32 @@ class Store:
                 else:
                     stage = max(0, stage - 1)
                     interval = 0
+                    db.execute("UPDATE words SET drill_completed_at='' WHERE id=?", (word_id,))
                 due = (datetime.now(timezone.utc) + (timedelta(days=interval) if interval else timedelta(minutes=10))).isoformat()
                 db.execute("UPDATE words SET stage=?,due=? WHERE id=?", (stage, due, word_id))
-        return {"correct": correct, "expected": row["definition"] if mode == "meaning" else row["word"], "answer": answer.strip(), "tip": row["tip"], "word": self.word(word_id)}
+        return {"attempt_id": attempt_id, "correct": correct, "expected": row["definition"] if mode == "meaning" else row["word"], "answer": answer.strip(), "tip": row["tip"], "word": self.word(word_id)}
+
+    def complete_drill(self, word_id, data):
+        first, last = data.get("first_attempt_id"), data.get("last_attempt_id")
+        if type(first) is not int or type(last) is not int or not 0 < first <= last:
+            raise ValueError("This drill needs its saved repetition records. Start a new drill.")
+        with self.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            word = db.execute("SELECT * FROM words WHERE id=?", (word_id,)).fetchone()
+            if not word:
+                raise KeyError("Word not found.")
+            if data.get("version") != word["version"]:
+                raise ValueError("This word changed during the drill. Start a new drill for the updated word.")
+            rows = db.execute("SELECT * FROM attempts WHERE word_id=? AND id BETWEEN ? AND ? ORDER BY id", (word_id,first,last)).fetchall()
+            if not rows or rows[0]["id"] != first or rows[-1]["id"] != last or any(r["mode"] != "drill" or r["created"] <= word["recall_reset_at"] for r in rows):
+                raise ValueError("These records do not belong to one drill for this spelling.")
+            correct = sum(r["correct"] for r in rows)
+            qualifies = correct >= 10 and correct * 5 >= len(rows) * 4
+            later_struggle = db.execute("SELECT 1 FROM attempts WHERE word_id=? AND id>? AND mode='review' AND (correct=0 OR hinted=1) LIMIT 1", (word_id,last)).fetchone()
+            # The last saved answer fixes the time, so retries never extend the reduction.
+            if qualifies and not later_struggle and (not word["drill_completed_at"] or datetime.fromisoformat(rows[-1]["created"]) > datetime.fromisoformat(word["drill_completed_at"])):
+                db.execute("UPDATE words SET drill_completed_at=? WHERE id=?", (rows[-1]["created"],word_id))
+        return {"qualifies": qualifies, "repetitions": len(rows), "correct": correct, "word": self.word(word_id)}
 
     def progress(self):
         with self.db() as db:
@@ -511,13 +538,13 @@ class Store:
             validate_audio_urls(w.get("audio_urls", {}))
             if w.get("pronunciation_accent", "") not in ("", "uk", "us"):
                 raise ValueError("Invalid pronunciation choice in backup.")
-            reset = w.get("recall_reset_at", "")
-            if reset:
+            for field in ("recall_reset_at", "drill_completed_at"):
+                stamp = w.get(field, "")
                 try:
-                    if datetime.fromisoformat(reset).tzinfo is None:
+                    if not isinstance(stamp, str) or stamp and datetime.fromisoformat(stamp).tzinfo is None:
                         raise ValueError()
                 except (ValueError, TypeError):
-                    raise ValueError("Invalid spelling reset date in backup.") from None
+                    raise ValueError("Invalid practice date in backup.") from None
             validated.append((w, item))
         for a in attempts:
             if not isinstance(a, dict) or a.get("word_id") not in ids or a.get("mode") not in ["review", "drill", "correction", "meaning"] or a.get("correct") not in [0, 1] or a.get("hinted") not in [0, 1] or not isinstance(a.get("answer"), str) or len(a["answer"]) > 200 or not isinstance(a.get("elapsed_ms"), int) or not 0 <= a["elapsed_ms"] <= 86400000:
@@ -539,6 +566,7 @@ class Store:
                 db.execute("UPDATE words SET audio_urls=? WHERE id=?", (json.dumps(original.get("audio_urls", {})), cur.lastrowid))
                 db.execute("UPDATE words SET pronunciation_accent=? WHERE id=?", (original.get("pronunciation_accent", ""),cur.lastrowid))
                 db.execute("UPDATE words SET recall_reset_at=? WHERE id=?", (original.get("recall_reset_at", ""),cur.lastrowid))
+                db.execute("UPDATE words SET drill_completed_at=? WHERE id=?", (original.get("drill_completed_at", ""),cur.lastrowid))
                 db.execute("UPDATE words SET meaning_flagged=?,distractors=? WHERE id=?", (original.get("meaning_flagged", 0), json.dumps(original.get("distractors", [])), cur.lastrowid))
                 id_map[original["id"]] = cur.lastrowid
                 added += 1

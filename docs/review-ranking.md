@@ -1,6 +1,6 @@
 # How Typewriter chooses words for practice
 
-This describes the implementation as of 11 October 2026. Typewriter uses a simple,
+This describes the implementation as of 14 October 2026. Typewriter uses a simple,
 performance-based priority score together with a staged review schedule. It does
 not currently use FSRS or a fitted forgetting curve. The coefficients below are
 product choices, not parameters validated against your long-term recall.
@@ -97,10 +97,12 @@ sorting uses the full value.
 The fifth word outranks the fourth despite having fewer misses. This is why
 sorting drill suggestions simply by mistake count produced the wrong order.
 
-Spelling reviews and drill lists sort by descending score, then earlier due time,
-then smaller word ID for a stable tie. A search in the drill dropdown gives prefix
-matches precedence over other substring matches, then sorts each group by this
-same priority. Searching does not change the saved score.
+Spelling reviews sort by descending score, then earlier due time, then smaller
+word ID for a stable tie. Drill lists use the same score with the temporary
+post-drill reduction described below; ties use the spelling score and then the
+same due-time/ID rules. A search in the drill dropdown gives prefix matches
+precedence over other substring matches, then sorts each group by drill priority.
+Searching does not change either score.
 
 ## Why these rules were chosen
 
@@ -184,8 +186,44 @@ A drill is recommended when the eight-answer spelling window contains at least
 two misses and either the current unaided correct streak is shorter than three
 or the latest spelling review still needs help. Three consecutive correct
 unaided reviews clear the recommendation. Drill repetitions do not clear it by
-themselves. The three recommendations on Today use spelling priority, rather
-than raw miss count. The dropdown ranks all matching words by priority.
+themselves. The three recommendations on Today and the searchable dropdown use
+**drill priority**, rather than raw miss count.
+
+### Temporary relief after a completed drill
+
+A finished drill qualifies when its saved repetitions include **at least ten
+correct answers and at least 80% accuracy**. Finishing a targeted drill or ending
+an open-ended drill both count. An early exit with fewer than ten correct answers
+keeps its repetitions in history but does not earn a new reduction.
+
+```text
+drill_priority = spelling_priority × 0.25   during the next 24 hours
+drill_priority = spelling_priority          otherwise
+```
+
+The reduction is fixed, does not stack, and runs from the last saved repetition.
+A later qualifying session can start a fresh period. Retrying a failed completion
+request uses the same saved answer time, so a retry cannot extend the period.
+The server checks its saved attempt records rather than trusting a client count.
+Spelling edits clear the reduction and invalidate the earlier spelling's drill.
+
+The word remains searchable and can still appear in suggestions, labelled
+**Recently drilled**. The reduction lowers its position relative to comparable
+words; it does not guarantee the word is last, or remove its underlying
+recommendation. After 24 hours its full drill score returns automatically.
+A later incorrect or hinted spelling review cancels the reduction immediately,
+even if a subsequent review is correct. A delayed completion response cannot
+hide a newer recall struggle. Meaning quizzes and correction repetitions do not
+cancel it.
+
+This is a queue-management heuristic: a reasonably successful drill should make
+room for other words without implying durable recall. Ten correct answers
+requires a substantial session, and the accuracy threshold prevents a session
+with many errors from automatically deprioritizing a difficult word. The 75%
+reduction and 24-hour window are practical initial choices, not empirically
+optimized values. A very high-priority drilled word can still outrank others.
+The spelling review score, due date, stage, and recommendation criteria are
+unchanged. Drill counts continue to be reported separately from recall.
 
 The word list's accuracy is the percentage across all that word's unaided
 spelling reviews since its latest spelling reset. The priority uses only the
@@ -290,5 +328,7 @@ nor their outcomes establish which settings are best for your IELTS spelling.
   queue advancement, and bounded endless refills.
 - [`tests/test_store.py`](../tests/test_store.py),
   [`tests/test_latest.py`](../tests/test_latest.py),
+  [`tests/test_drill_priority.py`](../tests/test_drill_priority.py),
+  [`tests/drills.cjs`](../tests/drills.cjs),
   [`tests/review.cjs`](../tests/review.cjs), and
   [`tests/latest.cjs`](../tests/latest.cjs): scheduling and regression checks.

@@ -4,6 +4,9 @@
   function comparePriority(a, b) {
     return (b.review_priority ?? 0) - (a.review_priority ?? 0) || (a.due || '').localeCompare(b.due || '') || a.id - b.id;
   }
+  function compareDrillPriority(a, b) {
+    return (b.drill_priority ?? b.review_priority ?? 0) - (a.drill_priority ?? a.review_priority ?? 0) || comparePriority(a,b);
+  }
   function gap(settings, random = Math.random) {
     const minimum = settings.quiz_interval_min ?? 5;
     const maximum = settings.quiz_interval_max ?? minimum;
@@ -66,7 +69,7 @@
     session.usedQuizIds = session.usedQuizIds.filter(id=>session.quizIds.includes(id));
     return true;
   }
-  const rules = {comparePriority,gap,create,recordSpelling,quizDue,advance,replenish};
+  const rules = {comparePriority,compareDrillPriority,gap,create,recordSpelling,quizDue,advance,replenish};
   if (typeof module !== 'undefined' && module.exports) module.exports = rules;
   else root.TypewriterReview = rules;
 })(globalThis);

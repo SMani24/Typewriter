@@ -77,6 +77,12 @@ Words with at least two misses in their last eight unaided spelling reviews appe
 as **Worth a drill** on Today and in the notebook and word picker. Three consecutive
 correct unaided reviews clear the suggestion; a new struggle can bring it back.
 Hinted answers, corrections, quizzes, and drill repetitions do not establish recall.
+Finishing a drill with at least ten correct repetitions and 80% accuracy lowers that
+word's **drill priority by 75% for 24 hours**, labelled **Recently drilled**. This also
+applies to open-ended drills when you finish. The word stays searchable; its review
+schedule and recall score stay unchanged. A missed or hinted spelling review restores
+full drill priority immediately. Shorter or less accurate drills still save every
+repetition without earning a new reduction.
 
 Short reviews use up to **ten due spelling words** by default: a convenient session
 length, independent of how words are ranked. Change **Words in a short review** in
