@@ -13,6 +13,7 @@ from .enrichment import Enrichment, parse_keys
 from .preparation import Preparation
 from .models import ModelAccessError
 from .spelling import check as check_spelling
+from .essay_words import EssayWords
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -29,6 +30,7 @@ def create_app(data_dir=None, keys_path=None, background=True):
     dictionary = Dictionary(store, network)
     enrichment = Enrichment(store, network, keys)
     preparation = Preparation(store)
+    essay_words = EssayWords(store)
     token = secrets.token_urlsafe(32)
     app.extensions.update(store=store, network=network, dictionary=dictionary, enrichment=enrichment, preparation=preparation)
 
@@ -92,6 +94,19 @@ def create_app(data_dir=None, keys_path=None, background=True):
     @app.post("/api/essay/spelling")
     def essay_spelling():
         return jsonify(check_spelling(body().get("text")))
+
+    @app.post("/api/essay/words")
+    def extract_essay_words():
+        return jsonify(essay_words.extract(body().get("text")))
+
+    @app.post("/api/essay/words/prompts")
+    def export_essay_word_prompts():
+        output,name=essay_words.export(body())
+        return send_file(output,mimetype="application/zip",as_attachment=True,download_name=name)
+
+    @app.post("/api/essay/words/preview")
+    def preview_essay_word_reply():
+        return jsonify(essay_words.preview(body().get("text")))
 
     @app.get("/api/logs/export")
     def export_logs():

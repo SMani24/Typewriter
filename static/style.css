@@ -151,3 +151,28 @@ dialog>.toast{position:sticky;bottom:0;left:auto;transform:none;width:auto;max-w
 .scheduler-panel button,#scheduler-dialog .button{white-space:normal;max-width:100%;}
 .scheduler-count{min-width:0;}
 #scheduler-date-changes{overflow-wrap:anywhere;}
+
+.essay-words-dialog{width:900px;}
+.essay-words-dialog p{margin-bottom:12px;}
+.essay-words-actions{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:18px 0;}
+.essay-words-actions>span{margin-right:auto;}
+.essay-words-list{border:1px solid var(--line);border-radius:10px;max-height:45vh;overflow:auto;}
+.essay-word-row{display:grid;grid-template-columns:18px minmax(100px,1fr) minmax(160px,1.5fr) auto;gap:16px;align-items:start;padding:18px;border-bottom:1px solid var(--line);}
+.essay-word-row:last-child{border-bottom:0;}
+.essay-word-source,.essay-word-correction{min-width:0;}
+.essay-word-source strong{display:block;overflow-wrap:anywhere;font-family:var(--serif);font-size:calc(19px * var(--text-scale));}
+.essay-word-source span,.essay-word-reason{display:block;font-size:calc(11px * var(--text-scale));color:var(--muted);overflow-wrap:anywhere;}
+.essay-word-row input[type=checkbox]{margin-top:9px;}
+.essay-word-row input[type=text]{margin:0 0 6px;}
+.essay-word-status{display:block;overflow-wrap:anywhere;}
+.essay-llm-review{background:#f4f6ee;border:1px solid var(--line);border-radius:10px;padding:18px;margin-top:24px;}
+.essay-llm-review summary{cursor:pointer;font-weight:500;margin-bottom:14px;}
+.essay-llm-review>label{margin-top:16px;}
+.essay-llm-review .checkbox-label{align-self:center;}
+.essay-reply-row{display:grid;gap:6px;padding:14px 0;border-top:1px solid var(--line);overflow-wrap:anywhere;}
+.essay-reply-row small{color:var(--muted);}
+#essay-words-status.error{color:var(--red);background:#f8eee7;}
+.essay-words-list>.muted{padding:20px;}
+.essay-words-dialog .button{white-space:normal;max-width:100%;}
+.essay-words-dialog .dialog-footer{flex-wrap:wrap;}
+@media(max-width:650px){.essay-word-row{grid-template-columns:18px minmax(0,1fr);gap:10px;}.essay-word-correction,.essay-word-row>button{grid-column:2;}.essay-words-actions{gap:12px;}.essay-words-actions>span{width:100%;}.essay-words-dialog .field-grid{grid-template-columns:1fr;}}

@@ -160,6 +160,24 @@ on or off at any time. Underlines use a bundled offline English wordlist that ac
 British and American spellings; names and uncommon words may still be flagged.
 This checks spelling rather than grammar or essay quality, and uses no API quota.
 
+Use **Review flagged words** to collect possible misspellings, even when underlines
+are off. Repeated occurrences are grouped. Enter an intended spelling and click
+**Add word** (or press Enter), or add several checked spellings together. Uncheck
+false flags. Existing notebook words and repeated corrections are kept once; words
+join the usual preparation queue with the **Essay spelling** tag. Your essay stays
+unchanged.
+
+For a second opinion, expand **Ask your own LLM to check these flags**. Choose the
+number of flags per prompt and download the selected flags as a ZIP of Markdown
+prompts. Short essay excerpts are optional and off by default. Give each prompt to
+your LLM, paste its JSON/Markdown reply or open its reply file, and click **Preview
+reply → Use suggestions in list**. Check the suggested spellings before adding them.
+Replies may skip valid words or uncertain corrections. Newer manual edits are kept;
+previewing a reply never adds words. This exchange makes no API calls and does not
+send your essay to a provider. Keep the original notebook to import its replies.
+You can also download the selected original flags as a plain text list. Work in the
+review list is kept in this browser tab across reloads.
+
 There is one current draft. **Download draft** saves a text copy before you start
 another. The draft is included in notebook backups; import restores it only when
 the current draft is empty. Existing essays stay protected. An unsaved copy in the

@@ -23,3 +23,9 @@ typewriter-preparation*.md
 /docs/typewriter-review-scheduling-development-plan.md
 
 /docs/review-scheduling-audit.local.md
+
+# Essay review downloads can contain personal vocabulary and excerpts.
+typewriter-essay-words*.zip
+typewriter-essay-words*.md
+typewriter-essay-words*.json
+typewriter-essay*.txt
