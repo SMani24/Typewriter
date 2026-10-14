@@ -269,7 +269,7 @@ function renderKeys() {
 }
 function settingsPayload() {
   const form = $('#settings-form'), result = {};
-  ['proxy_enabled','auto_ai','review_enabled','drill_enabled','sentence_enabled','definition_enabled','audio_enabled','meaning_enabled','clear_proxy_password'].forEach(k => result[k] = form.elements[k].checked);
+  ['proxy_enabled','auto_ai','review_enabled','drill_enabled','sentence_enabled','definition_enabled','audio_enabled','meaning_enabled','autoplay_sentence','autoplay_definition','autoplay_audio','autoplay_meaning','autoplay_drill','autoplay_correction','clear_proxy_password'].forEach(k => result[k] = form.elements[k].checked);
   ['proxy_type','proxy_host','proxy_username','proxy_password','model','preparation_method','pronunciation_accent'].forEach(k => result[k] = form.elements[k].value.trim());
   ['proxy_port','batch_size','daily_budget','requests_per_minute','offline_batch_size','review_session_size','audio_volume'].forEach(k => result[k] = Number(form.elements[k].value));
   result.quiz_interval_mode = form.elements.quiz_interval_mode.value;
@@ -524,8 +524,10 @@ function renderPractice() {
   $('#answer-submit').hidden = meaning;
   $('#answer-submit').innerHTML = 'Check spelling' + icon('arrow');
   preparePronunciation(word);
-  // Start on the user's session/Next action, retaining browser playback permission.
-  if (audioOnly) guarded(() => listen(true));
+  // A presentation starts sound only for the chosen task, with trusted audio.
+  const audioTask = drill ? 'drill' : practice.correction ? 'correction' : word.exercise;
+  const defaults = {audio:true};
+  if ((state.settings['autoplay_'+audioTask] ?? defaults[audioTask] ?? false) && word.audio_eligible) guarded(() => listen(true));
   setTimeout(() => {if ($('#practice-active').hidden) return;if (meaning) $('.meaning-choice')?.focus();else $('#answer').focus();},20);
 }
 function selectMeaning(index) {

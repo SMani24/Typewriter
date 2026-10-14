@@ -86,3 +86,6 @@ dialog>.toast{position:sticky;bottom:0;left:auto;transform:none;width:auto;max-w
 .review-ranking-help p+p {margin-top:12px}
 .volume-setting .rhythm-slider-label {display:flex;justify-content:space-between;align-items:center;gap:12px}
 .volume-setting output {min-width:52px;flex-shrink:0;font-family:var(--sans);font-size:13px}
+
+.autoplay-options {display:grid;gap:12px;margin:16px 0}
+.autoplay-options .checkbox-label {margin:0;font-size:13px}

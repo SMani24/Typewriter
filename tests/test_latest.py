@@ -66,3 +66,15 @@ class LatestTests(unittest.TestCase):
         for value in (-1, 101, True, "35"):
             with self.assertRaises(ValueError):
                 self.store.save_settings({"audio_volume": value})
+
+    def test_autoplay_defaults_and_saved_task_preferences(self):
+        tasks = ["sentence", "definition", "audio", "meaning", "drill", "correction"]
+        for task in tasks:
+            self.assertEqual(self.store.settings()["autoplay_" + task], task == "audio")
+        values = {"autoplay_" + task: task != "audio" for task in tasks}
+        self.store.save_settings(values)
+        saved = Store(self.store.path).settings()
+        for key, value in values.items():
+            self.assertEqual(saved[key], value)
+            with self.assertRaises(ValueError):
+                self.store.save_settings({key: "false"})

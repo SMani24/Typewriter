@@ -49,7 +49,7 @@ Remove `~/.local/share/applications/typewriter.desktop` to remove the menu entry
 - Drill for 10, 20, or 50 correct repetitions, or practise without a target.
 - Review due words, select a set for extra practice, or choose **Practise endlessly** on Today. Enter checks an answer; a result card stays visible until you press Enter again.
 - Choose sentence spelling, spelling from a meaning, audio-only spelling, and meaning quizzes in Settings.
-- Listening exercises play automatically; **Alt+P** plays or replays audio inside a session.
+- Choose automatic playback separately for each task in Settings; **Alt+P** replays audio.
 - Flag incorrect pronunciation, preview recordings, or upload your own voice in the word editor.
 - Flag a wrong meaning during practice, or select existing words and prepare them again.
 - Edit the current word during a review or drill, including correcting its spelling.
@@ -113,7 +113,12 @@ playback, press **Alt+P** or Listen once to grant a playback gesture. Checked re
 load silently ahead of playback, and replay reuses the loaded clip. Recordings are
 privately cached by their revision so an uploaded replacement uses a fresh URL.
 
-The **Playback volume** slider controls practice audio and previews, including mute.
+In **Settings → Play audio when a task opens**, choose automatic playback separately
+for sentence spelling, spelling from a meaning, audio-only spelling, meaning quizzes,
+word drills, and correction practice. Audio-only playback starts enabled; the other
+tasks start disabled. Only checked, unflagged recordings play automatically. Turning
+it off leaves **Listen** and **Alt+P** available. The **Playback volume** slider controls
+practice audio and previews, including mute.
 Settings prompt you to save or discard changes before leaving the page. Changing a
 word's spelling restarts its schedule and word-level statistics while preserving
 past answers in global history; check its sentence, tip, and pronunciation again.

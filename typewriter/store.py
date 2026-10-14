@@ -20,6 +20,8 @@ DEFAULTS = {
     "quiz_interval_mode": "fixed", "quiz_interval_min": 5, "quiz_interval_max": 5,
     "review_session_size": 10, "audio_volume": 100,
     "pronunciation_accent": "uk",
+    "autoplay_sentence": False, "autoplay_definition": False, "autoplay_audio": True,
+    "autoplay_meaning": False, "autoplay_drill": False, "autoplay_correction": False,
 }
 
 
@@ -128,7 +130,7 @@ class Store:
                 if key == "proxy_password" and data[key] == "" and not data.get("clear_proxy_password"):
                     continue
                 values[key] = data[key]
-        for key in ["proxy_enabled", "auto_ai", "review_enabled", "drill_enabled", "sentence_enabled", "definition_enabled", "audio_enabled", "meaning_enabled"]:
+        for key in ["proxy_enabled", "auto_ai", "review_enabled", "drill_enabled", "sentence_enabled", "definition_enabled", "audio_enabled", "meaning_enabled", "autoplay_sentence", "autoplay_definition", "autoplay_audio", "autoplay_meaning", "autoplay_drill", "autoplay_correction"]:
             if not isinstance(values[key], bool):
                 raise ValueError("Choose an on/off setting.")
         if not values["review_enabled"] and not values["drill_enabled"]:
