@@ -31,7 +31,7 @@ class CorrectionTests(unittest.TestCase):
     def test_flagged_ready_word_replaces_only_meaning_and_options(self):
         self.store.set_meaning_flag(self.id, True)
         text, prompt = self.response()
-        self.assertIn('definition is WRONG', prompt)
+        self.assertIn('wrong or too vague as a recall clue', prompt)
         preview = self.preparation.preview(text)['words'][0]
         self.assertEqual(preview['replace'], ['definition','distractors'])
         self.assertEqual(preview['previous']['definition'], 'A wrong meaning.')
@@ -138,13 +138,13 @@ class CorrectionTests(unittest.TestCase):
         self.assertTrue(word['meaning_flagged'])
         self.assertEqual(word['distractors'], self.material['distractors'])
 
-    def test_api_corrects_flagged_ready_words_but_does_not_auto_queue_them(self):
+    def test_api_corrects_flagged_ready_words_in_the_next_preparation_batch(self):
         keys = self.path / 'keys.txt'
         keys.write_text('fake-key')
         enrichment = Enrichment(self.store, Mock(), keys)
         self.store.set_meaning_flag(self.id, True)
         self.assertEqual(len(enrichment.pending()), 1)
-        self.assertEqual(enrichment.pending(False), [])
+        self.assertEqual(len(enrichment.pending(False)), 1)
         enrichment.generate = Mock(return_value={'necessary': self.material})
         enrichment.run([self.id])
         self.assertEqual(enrichment.snapshot()['status'], 'completed')

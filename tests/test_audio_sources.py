@@ -40,6 +40,16 @@ class AudioSourceTests(unittest.TestCase):
         with patch.object(self.network,'request',return_value=self.response()):self.sources.preview(self.id,record['id'])
         return self.sources.accept(self.id,record['id'])
 
+    def test_comparison_includes_both_cambridge_accents_and_legacy_voice(self):
+        urls={accent:f'https://dictionary.cambridge.org/{accent}-highest.mp3' for accent in ('uk','us')}
+        self.store.edit_word(self.id,{'source':'Cambridge','audio_url':urls['uk'],'audio_urls':urls})
+        records=self.sources.options(self.id,'cambridge')['candidates']
+        self.assertEqual({r['accent'] for r in records},{'uk','us'})
+        self.assertEqual({r['url'] for r in records},set(urls.values()))
+        self.store.edit_word(self.id,{'source':'Cambridge','audio_urls':{}})
+        records=self.sources.fetch(self.store.word(self.id),'cambridge')
+        self.assertEqual([(r['accent'],r['url']) for r in records],[('uk',urls['uk'])])
+
     def test_oxford_only_exact_headword_and_its_recordings(self):
         html='''<div class="top-container"><h1 class="headword">highest</h1><div class="sound pron-us" data-src-mp3="/media/english/highest.mp3"></div></div><div class="sound pron-uk" data-src-mp3="/media/english/unrelated.mp3"></div>'''
         records=self.sources.oxford('highest',html,'https://www.oxfordlearnersdictionaries.com/definition/english/highest')

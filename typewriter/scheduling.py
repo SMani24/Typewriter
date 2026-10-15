@@ -167,7 +167,7 @@ class SchedulingStore:
             pool = (due or spellable) if kind=='endless' else spellable if kind=='selected' else due
             if data.get('meaning_only') or kind=='drill':
                 pool = []
-            limit = 10 if kind=='endless' else len(pool) if kind=='selected' else settings['review_session_size']
+            limit = 10 if kind=='endless' else len(pool) if kind=='selected' else (settings['review_session_size'] or len(pool))
             if kind == 'normal':
                 # Reserve capacity, but choose each actual displayed position at current credit.
                 remaining = [w['id'] for w in pool]
@@ -188,7 +188,7 @@ class SchedulingStore:
         settings = json.loads(session['settings'])
         offered = json.loads(session['offered'])
         remaining = set(json.loads(session['remaining']))
-        if len(offered) >= settings['review_session_size']:
+        if settings['review_session_size'] and len(offered) >= settings['review_session_size']:
             return None
         eligible = [w for w in words if w['id'] in remaining and w['is_due'] and spelling_types(w,settings)]
         if not eligible:

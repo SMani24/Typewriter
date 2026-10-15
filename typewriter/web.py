@@ -137,6 +137,10 @@ def create_app(data_dir=None, keys_path=None, background=True):
     def meaning_settings(word_id):
         return jsonify(store.set_meaning_flag(word_id, body().get("flagged")))
 
+    @app.patch("/api/words/<int:word_id>/sentence")
+    def sentence_settings(word_id):
+        return jsonify(store.set_sentence_flag(word_id,body().get("flagged")))
+
     @app.post("/api/words/<int:word_id>/attempts")
     def attempt(word_id):
         return jsonify(store.attempt(word_id, body()))

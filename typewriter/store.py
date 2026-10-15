@@ -20,7 +20,7 @@ DEFAULTS = {
     "sentence_enabled": True, "definition_enabled": True, "audio_enabled": True,
     "meaning_enabled": True, "preparation_method": "api", "offline_batch_size": 20,
     "quiz_interval_mode": "fixed", "quiz_interval_min": 5, "quiz_interval_max": 5,
-    "review_session_size": 10, "audio_volume": 100, "text_size": "default",
+    "review_session_size": 0, "audio_volume": 100, "text_size": "default",
     "pronunciation_accent": "uk", "scheduler": "legacy",
     "autoplay_sentence": False, "autoplay_definition": False, "autoplay_audio": True,
     "autoplay_meaning": False, "autoplay_drill": False, "autoplay_correction": False,
@@ -76,12 +76,14 @@ class Store(SchedulingStore):
                 schema = source.execute("PRAGMA user_version").fetchone()[0]
                 if schema>2:
                     raise ValueError("This notebook needs a newer Typewriter version.")
-                if schema<2:
+                needs_clue_flag=not source.execute("SELECT 1 FROM pragma_table_info('words') WHERE name='sentence_flagged'").fetchone()
+                if schema<2 or needs_clue_flag:
                     backups=self.path.parent/"backups"
                     backups.mkdir(exist_ok=True)
-                    destination=backups/("before-scheduler-v2-"+datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")+".db")
+                    destination=backups/(("before-scheduler-v2-" if schema<2 else "before-clue-flags-")+datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")+".db")
                     with sqlite3.connect(destination) as backup:
                         source.backup(backup)
+                    destination.chmod(0o600)
         with self.db() as db:
             db.executescript("""
                 PRAGMA journal_mode=WAL;
@@ -119,7 +121,7 @@ class Store(SchedulingStore):
                 );
             """)
             columns = {r["name"] for r in db.execute("PRAGMA table_info(words)")}
-            for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''", "meaning_flagged": "INTEGER NOT NULL DEFAULT 0", "distractors": "TEXT NOT NULL DEFAULT '[]'", "audio_urls": "TEXT NOT NULL DEFAULT '{}'", "pronunciation_accent": "TEXT NOT NULL DEFAULT ''", "recall_reset_at": "TEXT NOT NULL DEFAULT ''", "drill_completed_at": "TEXT NOT NULL DEFAULT ''"}.items():
+            for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''", "meaning_flagged": "INTEGER NOT NULL DEFAULT 0", "sentence_flagged": "INTEGER NOT NULL DEFAULT 0", "distractors": "TEXT NOT NULL DEFAULT '[]'", "audio_urls": "TEXT NOT NULL DEFAULT '{}'", "pronunciation_accent": "TEXT NOT NULL DEFAULT ''", "recall_reset_at": "TEXT NOT NULL DEFAULT ''", "drill_completed_at": "TEXT NOT NULL DEFAULT ''"}.items():
                 if name not in columns:
                     db.execute(f"ALTER TABLE words ADD COLUMN {name} {definition}")
             columns = {r["name"] for r in db.execute("PRAGMA table_info(attempts)")}
@@ -136,6 +138,12 @@ class Store(SchedulingStore):
                                 if value != row[field]:
                                     db.execute(f"UPDATE {table} SET {field}=? WHERE id=?", (value,row["id"]))
                 db.execute("PRAGMA user_version=1")
+            if not db.execute("SELECT 1 FROM cache WHERE name='review-size-default-v2'").fetchone():
+                # Upgrade the former default once; preserve custom limits and future choices.
+                row=db.execute("SELECT value FROM settings WHERE name='review_session_size'").fetchone()
+                if row and json.loads(row["value"])==10:
+                    db.execute("UPDATE settings SET value='0' WHERE name='review_session_size'")
+                db.execute("INSERT INTO cache VALUES ('review-size-default-v2','1')")
             self.init_scheduling(db)
             db.execute("PRAGMA user_version=2")
 
@@ -187,7 +195,7 @@ class Store(SchedulingStore):
                 raise ValueError("Quiz intervals must be whole numbers between 1 and 10.")
         if values["quiz_interval_min"] > values["quiz_interval_max"] or values["quiz_interval_mode"] == "fixed" and values["quiz_interval_min"] != values["quiz_interval_max"]:
             raise ValueError("The minimum quiz interval cannot exceed the maximum; fixed intervals need matching values.")
-        for key, low, high in [("audio_volume", 0, 100), ("review_session_size", 1, 100), ("offline_batch_size", 1, 100), ("proxy_port", 1, 65535), ("batch_size", 1, 25), ("daily_budget", 1, 2000), ("requests_per_minute", 1, 60)]:
+        for key, low, high in [("audio_volume", 0, 100), ("review_session_size", 0, 100), ("offline_batch_size", 1, 100), ("proxy_port", 1, 65535), ("batch_size", 1, 25), ("daily_budget", 1, 2000), ("requests_per_minute", 1, 60)]:
             if type(values[key]) is not int or not low <= values[key] <= high:
                 raise ValueError(f"{key.replace('_', ' ').capitalize()} must be between {low} and {high}.")
         if values["proxy_type"] not in ["http", "socks5h"]:
@@ -261,7 +269,7 @@ class Store(SchedulingStore):
                 selected_accent = w["pronunciation_accent"] or accent
                 selected_audio = w["audio_urls"].get(selected_accent) if w["audio_urls"] else w["audio_url"] if selected_accent == "uk" else ""
                 w["audio_eligible"] = bool(w["audio_verified"] and not w["audio_flagged"] and (w["audio_file"] or w["audio_alternative"] or selected_audio))
-                w["clue"] = blank_sentence(w["word"], w["sentence"]) if contains_word(w["word"], w["sentence"]) else ""
+                w["clue"] = blank_sentence(w["word"], w["sentence"]) if not w["sentence_flagged"] and contains_word(w["word"], w["sentence"]) else ""
                 w["accuracy"] = round(100 * w["correct_reviews"] / w["reviews"]) if w["reviews"] else None
                 card = card_for(db,w)
                 w["legacy_due"] = w["due"]
@@ -366,6 +374,8 @@ class Store(SchedulingStore):
             db.execute("UPDATE words SET audio_urls=? WHERE id=?", (json.dumps(audio_urls), word_id))
             if item["definition"] != original["definition"]:
                 db.execute("UPDATE words SET meaning_flagged=0,distractors='[]' WHERE id=?", (word_id,))
+            if item["sentence"] != original["sentence"]:
+                db.execute("UPDATE words SET sentence_flagged=0 WHERE id=?", (word_id,))
             if renamed:
                 db.execute("DELETE FROM cache WHERE name=?",("chosen-audio:"+str(word_id),))
                 stamp = now()
@@ -425,6 +435,16 @@ class Store(SchedulingStore):
         self.log("info", "Meaning flagged for correction." if flagged else "Meaning flag cleared.")
         return self.word(word_id)
 
+    def set_sentence_flag(self, word_id, flagged):
+        if not isinstance(flagged,bool):
+            raise ValueError("Choose an on/off example flag.")
+        with self.db() as db:
+            if not db.execute("SELECT id FROM words WHERE id=?",(word_id,)).fetchone():
+                raise KeyError("Word not found.")
+            db.execute("UPDATE words SET sentence_flagged=?,version=version+1,updated=?,enrichment_error='' WHERE id=?",(int(flagged),now(),word_id))
+        self.log("info","Example flagged for improvement." if flagged else "Example flag cleared.")
+        return self.word(word_id)
+
     @staticmethod
     def replacement_fields(row, snapshot):
         if not snapshot or row["version"] != snapshot.get("version") or ("created" in snapshot and row["created"] != snapshot["created"]):
@@ -433,6 +453,8 @@ class Store(SchedulingStore):
             return ["definition", "sentence", "tip", "distractors"]
         if snapshot.get("kind") == "meaning" and row["meaning_flagged"]:
             return ["definition", "distractors"]
+        if snapshot.get("kind") == "flagged":
+            return (["definition","distractors"] if row["meaning_flagged"] else []) + (["sentence"] if row["sentence_flagged"] else [])
         return []
 
     def enrich_word(self, word_id, content, source, replacement=None):
@@ -447,7 +469,7 @@ class Store(SchedulingStore):
         sources = json.loads(item["sources"])
         replace = Store.replacement_fields(row, replacement)
         if replacement and not replace:
-            return row["status"] == "ready" and not row["meaning_flagged"]
+            return row["status"] == "ready" and not row["meaning_flagged"] and not row["sentence_flagged"]
         for field in ["definition", "sentence", "tip"]:
             value = content.get(field, "")
             if not isinstance(value, str) or not value.strip() or len(value) > 2000:
@@ -457,6 +479,8 @@ class Store(SchedulingStore):
             if not item[field] or field in replace:
                 item[field] = value.strip()
                 sources[field] = source
+                if field == "sentence":
+                    item["sentence_flagged"] = 0
                 if field == "definition":
                     item["meaning_flagged"] = 0
                     item["distractors"] = "[]"
@@ -469,9 +493,9 @@ class Store(SchedulingStore):
             except ValueError:
                 pass
         status = "ready" if all(item[k] for k in ["definition", "sentence", "tip"]) else "pending"
-        changed = any(item[k] != row[k] for k in ("definition", "sentence", "tip", "distractors", "meaning_flagged"))
-        db.execute("UPDATE words SET definition=?,sentence=?,tip=?,distractors=?,meaning_flagged=?,sources=?,updated=?,status=?,enrichment_error='',version=version+? WHERE id=?", (item["definition"], item["sentence"], item["tip"], item["distractors"], item["meaning_flagged"], json.dumps(sources), now(), status, int(changed), item["id"]))
-        return status == "ready" and not item["meaning_flagged"]
+        changed = any(item[k] != row[k] for k in ("definition", "sentence", "tip", "distractors", "meaning_flagged", "sentence_flagged"))
+        db.execute("UPDATE words SET definition=?,sentence=?,tip=?,distractors=?,meaning_flagged=?,sentence_flagged=?,sources=?,updated=?,status=?,enrichment_error='',version=version+? WHERE id=?", (item["definition"], item["sentence"], item["tip"], item["distractors"], item["meaning_flagged"], item["sentence_flagged"], json.dumps(sources), now(), status, int(changed), item["id"]))
+        return status == "ready" and not item["meaning_flagged"] and not item["sentence_flagged"]
 
     def delete_word(self, word_id):
         with self.db() as db:
@@ -702,6 +726,8 @@ class Store(SchedulingStore):
                 raise ValueError("Invalid pronunciation flag in backup.")
             if w.get("meaning_flagged", 0) not in (0, 1):
                 raise ValueError("Invalid meaning flag in backup.")
+            if w.get("sentence_flagged",0) not in (0,1):
+                raise ValueError("Invalid example flag in backup.")
             options = w.get("distractors", [])
             if not isinstance(options, list):
                 raise ValueError("Invalid quiz options in backup.")
@@ -760,6 +786,7 @@ class Store(SchedulingStore):
                 if original.get("audio_alternative"):
                     imported_word=db.execute("SELECT * FROM words WHERE id=?",(cur.lastrowid,)).fetchone()
                     save_selected(db,imported_word,original["audio_alternative"])
+                db.execute("UPDATE words SET sentence_flagged=? WHERE id=?",(original.get("sentence_flagged",0),cur.lastrowid))
                 id_map[original["id"]] = cur.lastrowid
                 added += 1
             for a in normalized_attempts:

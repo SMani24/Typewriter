@@ -127,8 +127,7 @@ class AudioSources:
         target=word['word']
         if provider=='cambridge':
             source='https://dictionary.cambridge.org/dictionary/english/'+quote(target.replace(' ','-'))
-            current=word['audio_urls'].get(word['pronunciation_accent'] or self.store.settings()['pronunciation_accent']) or word['audio_url']
-            return [self.record(target,provider,url,accent,source,'Cambridge Dictionary',license_url=source) for accent,url in word['audio_urls'].items() if url!=current]
+            return [self.record(target,provider,url,accent,source,'Cambridge Dictionary',license_url=source) for accent,url in (word['audio_urls'] or ({'uk':word['audio_url']} if word['audio_url'] else {})).items()]
         if provider=='oxford':
             url='https://www.oxfordlearnersdictionaries.com/definition/english/'+quote(target.replace(' ','-'))
             content,final=self.read(url)
@@ -176,7 +175,7 @@ class AudioSources:
             rejected=json.loads(row['value']) if row else []
             result=[]
             for record in records:
-                if record['id'] in rejected or record['id']==word['audio_alternative'].get('id'):continue
+                if record['id'] in rejected:continue
                 key='audio-candidate:'+scope+':'+record['id']
                 db.execute('INSERT OR REPLACE INTO cache VALUES (?,?)',(key,json.dumps(record)))
                 result.append(record)

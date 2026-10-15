@@ -133,7 +133,7 @@ class Enrichment:
             self.store.job_state(self.state)
 
     def pending(self, include_errors=True):
-        return [w for w in self.store.list_words() if (w["status"] != "ready" or include_errors and w["meaning_flagged"]) and (include_errors or not w["enrichment_error"] and not w["meaning_flagged"])]
+        return [w for w in self.store.list_words() if (w["status"] != "ready" or w["meaning_flagged"] or w["sentence_flagged"]) and (include_errors or not w["enrichment_error"])]
 
     def snapshot(self):
         with self.lock:
@@ -195,7 +195,7 @@ class Enrichment:
                 content = self.generate(words)
                 completed = 0
                 for w in words:
-                    replacement = {"version": w["version"], "created": w["created"], "kind": "meaning"} if w["meaning_flagged"] else None
+                    replacement = {"version": w["version"], "created": w["created"], "kind": "flagged"} if w["meaning_flagged"] or w["sentence_flagged"] else None
                     if w["word"] in content and self.store.enrich_word(w["id"], content[w["word"]], "Gemini", replacement):
                         completed += 1
                     else:
