@@ -176,3 +176,14 @@ dialog>.toast{position:sticky;bottom:0;left:auto;transform:none;width:auto;max-w
 .essay-words-dialog .button{white-space:normal;max-width:100%;}
 .essay-words-dialog .dialog-footer{flex-wrap:wrap;}
 @media(max-width:650px){.essay-word-row{grid-template-columns:18px minmax(0,1fr);gap:10px;}.essay-word-correction,.essay-word-row>button{grid-column:2;}.essay-words-actions{gap:12px;}.essay-words-actions>span{width:100%;}.essay-words-dialog .field-grid{grid-template-columns:1fr;}}
+
+/* A deliberate choice, with the recording and its provenance kept together. */
+.alternative-audio-dialog {max-width: min(640px, calc(100vw - 32px));}
+.alternative-audio-dialog h2 {overflow-wrap: anywhere;}
+.voice-source {display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:20px;}
+.voice-accent {font-size:calc(12px * var(--text-scale));color:var(--muted);}
+.voice-confirm {margin:20px 0;line-height:1.6;}
+.voice-actions {flex-wrap:wrap;gap:12px;}
+#alternative-audio-preview,.pronunciation-notice audio {display:block;width:100%;margin:14px 0;}
+#audio-source-credit {overflow-wrap:anywhere;}
+@media(max-width:600px){.voice-actions .button{flex:1 1 100%;}.alternative-audio-dialog{padding:24px;}}

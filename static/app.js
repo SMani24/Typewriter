@@ -86,7 +86,7 @@ function showFailure() {
 }
 function showPronunciationNotices() {
   if (!pronunciationNotices.length || $$('dialog[open]').length) return;
-  $('#pronunciation-notices').innerHTML = pronunciationNotices.map(w=>`<div class="pronunciation-notice">${w.alternative ? `<label class="checkbox-label"><input type="checkbox" data-alternate-accent="${w.id}" value="${w.alternative}" checked><span><strong>${escapeHtml(w.word)}</strong><br>${w.preferred.toUpperCase()} audio is unavailable. Use ${w.alternative.toUpperCase()} for this word?</span></label>` : `<strong>${escapeHtml(w.word)}</strong><p class="field-note">${w.error ? escapeHtml(w.error) : 'No UK or US pronunciation was found. You can upload a recording in the word editor.'}</p>`}</div>`).join('');
+  $('#pronunciation-notices').innerHTML = pronunciationNotices.map(w=>`<div class="pronunciation-notice">${w.alternative ? `<label class="checkbox-label"><input type="checkbox" data-alternate-accent="${w.id}" value="${w.alternative}" checked><span><strong>${escapeHtml(w.word)}</strong><br>${w.preferred.toUpperCase()} audio is unavailable. Use ${w.alternative.toUpperCase()} for this word?</span></label>` : `<strong>${escapeHtml(w.word)}</strong><p class="field-note">${w.error ? escapeHtml(w.error) : 'No UK or US pronunciation was found. You can upload a recording in the word editor.'}</p>`}${w.alternative ? `<audio controls preload="none" aria-label="Preview ${escapeHtml(w.word)} ${w.alternative.toUpperCase()} voice" src="/api/words/${w.id}/audio?accent=${w.alternative}&preview=1"></audio>` : ''}<button type="button" class="text-button" data-find-voice="${w.id}">Find &amp; preview alternatives</button></div>`).join('');
   $('[data-action="use-alternate-pronunciations"]').hidden = !pronunciationNotices.some(w=>w.alternative);
   $('#pronunciation-choice-dialog').showModal();
 }
@@ -99,7 +99,7 @@ async function checkAddedPronunciations(ids) {
       const id=pending.shift();
       try {
         const info=await api(`/words/${id}/pronunciation/check`,'POST',{});
-        if(!info.uploaded && !info.available.includes(info.preferred)) pronunciationNotices.push(info);
+        if(!info.uploaded && !info.chosen && !info.available.includes(info.preferred)) pronunciationNotices.push(info);
       } catch(error) {
         const word=state.words.find(w=>w.id===id);
         pronunciationNotices.push({id,word:word?.word || 'Saved word',error:'The word is saved, but pronunciation could not be checked. '+error.message});
@@ -566,7 +566,7 @@ function audioEligible(word, settings) {
   const accent=word.pronunciation_accent || settings.pronunciation_accent || 'uk';
   const urls=word.audio_urls || {};
   const recording=Object.keys(urls).length ? urls[accent] : accent==='uk' ? word.audio_url : '';
-  return !!(word.audio_verified && !word.audio_flagged && (word.audio_file || recording));
+  return !!(word.audio_verified && !word.audio_flagged && (word.audio_file || word.audio_alternative?.url || recording));
 }
 function exerciseTypes(word, settings = state.settings) {
   const types = [];
@@ -859,6 +859,12 @@ function renderWordAudio() {
   $('#audio-verified').disabled = !!word.audio_flagged;
   $('[data-action="restore-audio"]').hidden = !word.audio_flagged;
   $('[data-action="remove-audio"]').hidden = !word.audio_file;
+  $('[data-action="remove-alternative-audio"]').hidden = !word.audio_alternative?.url;
+  $('[data-action="find-edit-voice"]').disabled = !!word.audio_file;
+  const chosen=word.audio_alternative, credit=$('#audio-source-credit');
+  credit.hidden=!chosen?.url;
+  credit.innerHTML=chosen?.url ? `${escapeHtml(chosen.label)} · ${escapeHtml(chosen.author)} · <a href="${escapeHtml(chosen.license_url || chosen.source_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(chosen.license_name)}</a> · <a href="${escapeHtml(chosen.source_url)}" target="_blank" rel="noopener noreferrer">Source page</a><br>This chosen voice takes precedence over the accent setting for this word.` : '';
+
 }
 async function changeWordAudio(data) {
   const result = await api(`/words/${editingId}/audio`,'PATCH',data);
@@ -1098,6 +1104,9 @@ const actions = {
   'refresh-models':refreshModels, 'preview-audio':previewAudio,
   'flag-edit-audio':() => changeWordAudio({flagged:true,verified:false}),
   'restore-audio':() => changeWordAudio({flagged:false,verified:false}),
+  'find-edit-voice':()=>TypewriterAudio.open(editingId),
+  'find-practice-voice':()=>{stopPronunciation();return TypewriterAudio.open(currentWord().id);},
+  'remove-alternative-audio':async()=>{$('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();await api(`/words/${editingId}/pronunciation/alternative`,'DELETE');await refresh();renderWordAudio();},
   'remove-audio':removeUploadedAudio, 'flag-practice-audio':flagPracticeAudio,
   'skip-audio':skipAudio,
   'retry-drill-completion':()=>{if (practice?.mode === 'drill') return saveDrillCompletion(practice);},
@@ -1222,3 +1231,23 @@ setInterval(async () => {
 window.addEventListener('pagehide',()=>{
   if (practice?.serverId && !practice.endPromise) fetch(`/api/practice-sessions/${practice.serverId}/end`,{method:'POST',keepalive:true,headers:{'Content-Type':'application/json','X-Typewriter-Token':token},body:'{}'}).catch(()=>{});
 });
+
+// Alternative voices are chosen explicitly; fetching or rejecting one never changes practice data.
+TypewriterAudio.configure({api,word:id=>state.words.find(w=>w.id===id),volume:()=>state.settings.audio_volume,notify:toast,
+  accepted:async word=>{
+    pronunciationNotices=pronunciationNotices.filter(w=>w.id!==word.id);
+    if($('#pronunciation-choice-dialog').open){$('#pronunciation-choice-dialog').close();showPronunciationNotices();}
+    await refresh();
+    if(editingId===word.id && $('#word-dialog').open){$('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();renderWordAudio();}
+    if(practice && currentWord()?.id===word.id){
+      const target=currentWord();Object.assign(target,word);
+      if(practice.audioBlocked)renderPractice();else preparePronunciation(target);
+    }
+    toast('Voice chosen and enabled for audio-only exercises.');
+  }
+});
+$('#pronunciation-notices').addEventListener('click',event=>{
+  const button=event.target.closest('[data-find-voice]');
+  if(button){$$('#pronunciation-notices audio').forEach(audio=>audio.pause());TypewriterAudio.open(Number(button.dataset.findVoice));}
+});
+$('#pronunciation-choice-dialog').addEventListener('close',()=>{$$('#pronunciation-notices audio').forEach(audio=>{audio.pause();audio.removeAttribute('src');audio.load();});});

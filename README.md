@@ -124,6 +124,23 @@ the background; if the preferred accent is missing, you can accept an available
 alternative for those words. Change a word’s accent in its editor. Uploaded
 recordings take precedence. Check a pronunciation in the word editor before including
 it in audio-only exercises.
+
+Use **Find another voice** in the word editor or during practice when a recording is
+missing or sounds wrong. The popup offers other Cambridge accents, then
+[Oxford Learner’s Dictionaries](https://www.oxfordlearnersdictionaries.com/about/english/pronunciation_english),
+[Wiktionary](https://en.wiktionary.org/), and the
+[Free Dictionary API](https://dictionaryapi.dev/), which can locate additional
+Wikimedia Commons recordings. Only exact-word matches are offered. Listen to the
+preview, confirm it says the word correctly, then choose **Use this voice**.
+**Reject & try next voice** remembers rejected clips across visits, including the same
+recording found through another source. **Search again including rejected voices**
+lets you reconsider them. Closing the popup leaves your recording unchanged.
+
+An approved alternative applies to this word regardless of the global accent setting,
+and is enabled for audio-only practice. Its source, speaker, and available license
+information remain visible in the editor. You can remove it there to return to
+unchecked Cambridge audio, flag it during practice, or replace it with an upload.
+Sources can be unavailable or lack the exact word; manual uploads remain available.
 Existing Cambridge recordings start unchecked. Cambridge lookups only offer audio from
 an exact matching headword, avoiding recordings for a base word or redirected typo.
 **Wrong pronunciation?** excludes a recording; an uploaded MP3, WAV, OGG, or M4A
@@ -275,8 +292,9 @@ In **Settings → Proxy**, enable HTTP or SOCKS5, enter the host and port, and o
 set a username and password. The editable preset is `127.0.0.1:10808`; a fresh install
 starts with the proxy disabled. SOCKS5 uses proxy-side DNS resolution.
 
-All app requests to Gemini and Cambridge, including pronunciation downloads, use this
-route. The app never falls back to direct networking when an enabled proxy fails.
+All app requests to Gemini and dictionary sources, including alternative-voice searches,
+previews, and pronunciation downloads, use this route. The app never falls back to
+direct networking when an enabled proxy fails.
 Disabling the proxy means a direct connection, regardless of shell proxy variables.
 Use **Save & test connection** to check the route; this checks connectivity, not API quotas.
 
@@ -292,13 +310,15 @@ an empty notebook restores the scheduler choice. Merges keep the existing choice
 Upgrades create a physical database backup before migrating older notebooks.
 Uploaded recordings are not embedded in JSON backups. Copy the entire `data/` directory
 when moving your notebook and its recordings together.
-Imported Cambridge recordings need checking again before audio-only practice.
+Approved alternative-source choices and attribution are included in JSON backups.
+Imported recordings need checking again before audio-only practice; alternative voices
+can be downloaded again through your configured proxy.
 The server binds to localhost and uses same-origin request checks. This is a personal
 local app; internet hosting and multi-user accounts are outside its current scope.
 
 Dictionary parsing draws on [AnkiAutomata](https://github.com/SMani24/AnkiAutomata).
-Typewriter runs independently of Anki. Dictionary lookups depend on Cambridge's site
-structure and availability; manual entry and Gemini remain alternatives.
+Typewriter runs independently of Anki. Dictionary lookups and alternative voices depend
+on each source’s site structure and availability; manual entry and recordings remain available.
 
 ## Checks
 
@@ -306,7 +326,8 @@ structure and availability; manual entry and Gemini remain alternatives.
 python -m unittest discover -s tests -v
 ```
 
-Optional browser checks use a temporary notebook and never call Gemini or Cambridge:
+Optional browser checks use a temporary notebook and never call Gemini or external
+dictionary sources:
 
 ```bash
 npm install
