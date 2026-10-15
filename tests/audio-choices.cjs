@@ -36,8 +36,9 @@ def voices(word,provider):
 sources.fetch=voices
 def request(method,url,**kwargs):
     if '/highest-' not in url:raise AssertionError('No live provider requests in browser checks')
-    return Mock(status_code=200,headers={},iter_content=lambda size:[content],close=lambda:None)
+    return Mock(status_code=200,headers={},iter_content=lambda size:[b'<html>unavailable</html>' if '/english/highest-0.wav' in url else content],close=lambda:None)
 app.extensions['network'].request=request
+d.lookup=lambda word,**kwargs: {'audio':{},'senses':[]}
 app.run(host='127.0.0.1',port=int(sys.argv[2]),debug=False,threaded=True)`;
   const server=spawn(path.join(__dirname,'..','.venv','bin','python'),['-u','-c',script,directory,String(port)],{cwd:path.join(__dirname,'..'),stdio:['ignore','ignore','pipe']});
   let logs='';server.stderr.on('data',chunk=>logs+=chunk);let browser;
@@ -54,51 +55,45 @@ app.run(host='127.0.0.1',port=int(sys.argv[2]),debug=False,threaded=True)`;
       const result=await response.json();if(!response.ok)throw new Error(result.error);return result;
     },{url,method,data});}
     const id=(await api('/state')).words[0].id;
-    async function word(){return (await api('/state')).words[0];}
+    async function word(){return (await api('/state')).words.find(w=>w.id===id);}
     async function edit(){await page.locator('.nav-item[data-page="words"]').click();await page.locator(`[data-edit="${id}"]`).click();await page.waitForSelector('#word-dialog[open]');}
-    async function open(){await page.locator('[data-action="find-edit-voice"]').click();await page.waitForSelector('#alternative-audio-candidate:not([hidden])');}
-    async function play(){await page.locator('#preview-alternative-audio').click();await page.waitForFunction(()=>document.querySelector('#alternative-audio-preview').currentTime>0);}
-    async function reject(){await page.locator('#next-alternative-audio').click();await page.waitForFunction(()=>!document.querySelector('#next-alternative-audio').disabled);}
-    async function approve(){await play();await page.locator('#alternative-audio-checked').check();await page.locator('#approve-alternative-audio').click();await page.waitForSelector('#alternative-audio-dialog',{state:'hidden'});}
+    async function open(){await page.locator('[data-action="find-edit-voice"]').click();await page.waitForFunction(()=>document.querySelector('#alternative-audio-status').textContent.startsWith('4 voices available'));}
+    const cards=()=>page.locator('.voice-option');
+    async function play(index){await cards().nth(index).locator('[data-play-voice]').click();await page.waitForFunction(()=>document.querySelector('#alternative-audio-preview').currentTime>0);}
+    async function approve(index){await play(index);await page.locator('#alternative-audio-checked').check();await page.locator('#approve-alternative-audio').click();await page.waitForSelector('#alternative-audio-dialog',{state:'hidden'});}
     await edit();await open();
-    assert.match(await page.locator('#alternative-audio-source').textContent(),/Oxford/);
-    assert.equal(await page.locator('#alternative-audio-preview').evaluate(a=>a.paused),true);
-    await page.locator('#alternative-audio-checked').check();assert(await page.locator('#approve-alternative-audio').isDisabled());
-    const before=await word();await play();assert(await page.locator('#approve-alternative-audio').isEnabled());
-    await reject();assert.match(await page.locator('#alternative-audio-accent').textContent(),/American/);
+    assert.equal(await cards().count(),4);
+    assert.equal(await page.locator('#alternative-audio-preview').evaluate(a=>a.paused && !a.controls && a.hidden),true);
+    assert.equal(await page.locator('#preview-alternative-audio').count(),0);
+    const before=await word();
+    await cards().first().locator('[data-play-voice]').click();
+    await page.waitForFunction(()=>document.querySelector('#alternative-audio-playback').textContent.includes('could not be played'));
     assert(await page.locator('#approve-alternative-audio').isDisabled());
-    await page.keyboard.press('Escape');assert.equal((await word()).audio_verified,before.audio_verified);
-    assert.deepEqual((await word()).audio_alternative,{});
+    await play(1);await page.locator('#alternative-audio-checked').check();assert(await page.locator('#approve-alternative-audio').isEnabled());
+    await play(2);assert(await page.locator('#approve-alternative-audio').isDisabled());
+    // Compare freely: every voice remains in the list, and a previous preview can be chosen.
+    assert.equal(await cards().count(),4);
+    await cards().nth(1).locator('input[type="radio"]').check();await page.locator('#alternative-audio-checked').check();assert(await page.locator('#approve-alternative-audio').isEnabled());
+    await page.keyboard.press('Escape');assert.deepEqual((await word()).audio_alternative,{});assert.equal((await word()).audio_verified,before.audio_verified);
     await page.waitForFunction(()=>!document.querySelector('#alternative-audio-preview').hasAttribute('src'));
-    await open();assert.match(await page.locator('#alternative-audio-accent').textContent(),/American/);
-    await reject();assert.match(await page.locator('#alternative-audio-source').textContent(),/Wiktionary/);
-    assert.equal(await page.locator('#alternative-audio-author').textContent(),'Synthetic test speaker');
-    assert.equal(await page.locator('#alternative-audio-license').getAttribute('href'),'https://creativecommons.org/licenses/by/4.0/');
-    await approve();assert.equal((await word()).audio_alternative.provider,'wiktionary');
+    await open();assert.equal(await cards().count(),4);
+    assert.match(await cards().nth(2).textContent(),/Wiktionary/);
+    assert.equal(await cards().nth(2).locator('a').first().getAttribute('href'),'https://creativecommons.org/licenses/by/4.0/');
+    await approve(2);assert.equal((await word()).audio_alternative.provider,'wiktionary');
     assert.equal((await word()).audio_eligible,true);await page.waitForSelector('#audio-source-credit:not([hidden])');
-    if(process.env.TYPEWRITER_SCREENSHOTS){fs.mkdirSync(process.env.TYPEWRITER_SCREENSHOTS,{recursive:true});await page.screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'chosen-voice.png'),animations:'disabled'});}
     await page.locator('[data-close="word-dialog"]').click();
-    // A flagged audio-only exercise can recover with a different voice and no phantom grade.
     await page.getByRole('checkbox',{name:'Select highest',exact:true}).check();
     await page.locator('[data-action="review-selected"]').click();await page.waitForSelector('#practice-dialog[open]');
     assert.match(await page.locator('#practice-mode').textContent(),/AUDIO-ONLY/);
     await page.locator('[data-action="flag-practice-audio"]').click();await page.waitForFunction(()=>document.querySelector('#answer').disabled);
-    await page.locator('[data-action="find-practice-voice"]').click();await page.waitForSelector('#alternative-audio-candidate:not([hidden])');
-    assert.match(await page.locator('#alternative-audio-source').textContent(),/Free Dictionary/);
-    await approve();await page.waitForFunction(()=>!document.querySelector('#answer').disabled);
+    await page.locator('[data-action="find-practice-voice"]').click();await page.waitForFunction(()=>document.querySelectorAll('.voice-option').length===4);
+    // Real browser playback from inside practice, with one compact button per voice.
+    await approve(3);await page.waitForFunction(()=>!document.querySelector('#answer').disabled);
     assert.equal((await api('/export')).attempts.length,0);
     await page.locator('#answer').fill('highest');await page.locator('#answer').press('Enter');await page.waitForSelector('#answer-form[data-result="correct"]');
     assert.equal((await api('/export')).attempts.length,1);
     await page.keyboard.press('Escape');await page.locator('[data-action="close-practice"]').click();
-    await edit();await page.locator('[data-action="find-edit-voice"]').click();await page.waitForSelector('#alternative-audio-candidate:not([hidden])');
-    // Previously chosen voices remain available after replacement until explicitly rejected.
-    assert.match(await page.locator('#alternative-audio-source').textContent(),/Wiktionary/);
-    await page.locator('#next-alternative-audio').click();await page.waitForSelector('#retry-alternative-audio:not([hidden])');
-    assert.match(await page.locator('#alternative-audio-status').textContent(),/No more voices/);
-    await page.locator('#retry-alternative-audio').click();await page.waitForSelector('#alternative-audio-candidate:not([hidden])');
-    assert.match(await page.locator('#alternative-audio-source').textContent(),/Oxford/);
-    await page.locator('#close-alternative-audio').click();
-    // Closing during a lookup must not reopen the popup when a late response arrives.
+    await edit();
     let release;const pending=new Promise(resolve=>release=resolve);let reached=false;
     await page.route('**/pronunciation/alternatives',async route=>{reached=true;await pending;try{await route.fulfill({json:{candidates:[],unavailable:true}});}catch{}});
     await page.locator('[data-action="find-edit-voice"]').click({noWaitAfter:true});
@@ -107,15 +102,19 @@ app.run(host='127.0.0.1',port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.waitForTimeout(100);assert.equal(await page.locator('#alternative-audio-dialog').evaluate(d=>d.open),false);
     await page.unroute('**/pronunciation/alternatives');
     await page.locator('[data-close="word-dialog"]').click();
+    // New words with no Cambridge audio explicitly offer finding a voice or skipping.
+    await page.locator('[data-action="add"]').first().click();await page.locator('#word-form input[name="word"]').fill('absence');await page.locator('#word-submit').click();
+    await page.waitForSelector('#pronunciation-choice-dialog[open]');
+    assert(await page.getByRole('button',{name:'Find & preview alternatives'}).isVisible());
+    await page.getByRole('button',{name:'Skip for now',exact:true}).click();
     await api('/settings','PUT',{text_size:'extra-large'});
     await page.setViewportSize({width:390,height:844});await page.reload();await page.waitForSelector('#app-content:not([hidden])');
     await edit();await open();
     const bounds=await page.locator('#alternative-audio-dialog').boundingBox();assert(bounds.x>=0 && bounds.x+bounds.width<=390);
     assert.equal(await page.locator('#alternative-audio-dialog').evaluate(d=>d.scrollWidth<=d.clientWidth),true);
-    assert(await page.locator('#alternative-audio-checked').isVisible());
-    if(process.env.TYPEWRITER_SCREENSHOTS)await page.screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'voice-preview-mobile.png'),animations:'disabled'});
+    if(process.env.TYPEWRITER_SCREENSHOTS){fs.mkdirSync(process.env.TYPEWRITER_SCREENSHOTS,{recursive:true});await page.screenshot({path:path.join(process.env.TYPEWRITER_SCREENSHOTS,'voice-list-mobile.png'),animations:'disabled'});}
     await page.keyboard.press('Escape');assert.equal((await word()).audio_alternative.provider,'free_dictionary');
     assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
-    console.log('Audio choices passed: real playback before consent, exact-source attribution, remembered rejection, fallback progression, cancellation, practice recovery without phantom grades, and mobile layout.');
+    console.log('Audio choices passed: all voices listed, real playback from practice, free comparison without rejection, a single play button per voice, visible failed playback, preview before consent, missing-audio popup, safe cancellation, unchanged grades, and mobile layout.');
   }finally{if(browser)await browser.close();server.kill('SIGTERM');await new Promise(resolve=>server.once('exit',resolve));fs.rmSync(directory,{recursive:true,force:true});}
 })().catch(error=>{console.error(error);process.exitCode=1;});

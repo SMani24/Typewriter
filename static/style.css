@@ -187,3 +187,11 @@ dialog>.toast{position:sticky;bottom:0;left:auto;transform:none;width:auto;max-w
 #alternative-audio-preview,.pronunciation-notice audio {display:block;width:100%;margin:14px 0;}
 #audio-source-credit {overflow-wrap:anywhere;}
 @media(max-width:600px){.voice-actions .button{flex:1 1 100%;}.alternative-audio-dialog{padding:24px;}}
+
+.voice-option{border:1px solid var(--line);border-radius:9px;padding:16px;margin:12px 0;background:var(--white)}
+.voice-option .voice-source{margin-top:0}.voice-option-actions{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:12px}
+.voice-play{display:inline-flex;align-items:center;gap:10px;border:1px solid #cbd8c4;border-radius:30px;background:var(--green-light);color:var(--green);padding:10px 17px;font-size:calc(12px * var(--text-scale));min-width:110px;justify-content:center}
+.voice-play:hover{background:#d9e5d6}.voice-option a{text-decoration:underline;text-underline-offset:2px}
+@media(max-width:600px){.voice-option-actions{flex-wrap:wrap}.voice-option{padding:13px}}
+
+.voice-option-actions .checkbox-label{white-space:nowrap;flex:0 0 auto}

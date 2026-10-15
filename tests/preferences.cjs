@@ -123,8 +123,19 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     assert.equal(await calls(),0);await end();
     await api('/words/'+id+'/audio','PATCH',{flagged:false,verified:false});
     await configure('sentence',true);await review('necessary');
-    assert.equal(await calls(),0);await end();
+    assert.equal(await calls(),1);await end();
     await api('/words/'+id+'/audio','PATCH',{verified:true});
+    // Existing notebooks have unchecked Cambridge URLs. Their clue-task autoplay
+    // must work without silently admitting them into audio-only exercises.
+    const clip=await (await page.request.get(base+`/api/words/${id}/audio?preview=1`)).body();
+    await api('/words/'+id+'/audio','DELETE');
+    await api('/words/'+id,'PATCH',{source:'Cambridge',audio_url:'https://dictionary.cambridge.org/necessary.mp3',audio_urls:{uk:'https://dictionary.cambridge.org/necessary.mp3'}});
+    const recordingRoute=`**/api/words/${id}/audio?*`;
+    await page.route(recordingRoute,route=>route.fulfill({body:clip,contentType:'audio/wav'}));
+    await configure('sentence',true);await review('necessary');
+    assert.equal(await calls(),1);await page.waitForFunction(()=>document.querySelector('#pronunciation').currentTime>0);
+    assert.equal((await api('/state')).words.find(w=>w.id===id).audio_eligible,false);
+    await end();await page.unroute(recordingRoute);
     // The Settings controls take part in save/discard, and survive a reload.
     await configure('sentence',false);
     await page.locator('.nav-item[data-page="settings"]').click();

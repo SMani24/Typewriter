@@ -362,7 +362,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     await preferences({meaning_enabled:true,sentence_enabled:false,definition_enabled:false,audio_enabled:false});
     const beforeFlag=await notebook();
     await selectReview('necessary');
-    await page.getByRole('button',{name:'Wrong meaning?',exact:true}).click();
+    await page.getByRole('button',{name:'Unclear or wrong meaning?',exact:true}).click();
     await page.waitForFunction(()=>document.querySelector('#practice-feedback').textContent.includes('flagged'));
     assert.equal((await notebook()).progress.meanings,beforeFlag.progress.meanings);
     await page.keyboard.press('Enter');
@@ -385,7 +385,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
 with zipfile.ZipFile(sys.argv[1]) as z:
     prompts=[z.read(n).decode() for n in z.namelist() if n!="README.md"]
     assert len(prompts)==1
-    assert 'definition is WRONG' in prompts[0]
+    assert 'wrong or too vague as a recall clue' in prompts[0]
     p=json.loads(prompts[0].split("\x60\x60\x60json\\n")[1].split("\\n\x60\x60\x60")[0])
     assert p["words"][0]["word"]=="necessary"
     p["words"][0].update(definition="Required for a particular purpose.",sentence="This change is necessary.",tip="One c, two s.",distractors=["Optional for a particular purpose.","Suitable for a particular purpose.","Available for a particular purpose."])
@@ -413,7 +413,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     await page.getByRole('button',{name:'Back to my notebook',exact:true}).click();
 
     // A ten-word mixed review adds a quiz after each five scored spelling words.
-    await preferences({sentence_enabled:true,definition_enabled:false,audio_enabled:false,meaning_enabled:true,quiz_interval_mode:'fixed',quiz_interval_min:5,quiz_interval_max:5});
+    await preferences({review_session_size:10,sentence_enabled:true,definition_enabled:false,audio_enabled:false,meaning_enabled:true,quiz_interval_mode:'fixed',quiz_interval_min:5,quiz_interval_max:5});
     const beforeMixed=await notebook();
     await page.locator('.nav-item[data-page="today"]').click();
     await page.getByRole('button',{name:'Start my review',exact:true}).click();

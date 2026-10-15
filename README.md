@@ -54,7 +54,7 @@ The text size previews immediately; save to keep it or discard to restore your s
 - Choose sentence spelling, spelling from a meaning, audio-only spelling, and meaning quizzes in Settings.
 - Choose automatic playback separately for each task in Settings; **Alt+P** replays audio.
 - Flag incorrect pronunciation, preview recordings, or upload your own voice in the word editor.
-- Flag a wrong meaning during practice, or select existing words and prepare them again.
+- Flag unclear examples or meanings during practice, or select existing words and prepare them again.
 - Edit the current word during a review or drill, including correcting its spelling.
 - Adjust playback volume and read the review-ranking explanation in Settings.
 - See recall accuracy, practice activity, and recurring misspellings.
@@ -97,9 +97,10 @@ schedule and recall score stay unchanged. A missed or hinted spelling review res
 full drill priority immediately. Shorter or less accurate drills still save every
 repetition without earning a new reduction.
 
-Short reviews use up to **ten due spelling words** by default: a convenient session
-length, independent of how words are ranked. Change **Words in a short review** in
-Settings to any value from 1–100; selected reviews use the whole selection.
+Reviews include **all due words with material for your enabled exercises** by default.
+In Settings, keep **All words ready for review** checked (0), or set **Words per review**
+to 1–100 for a shorter session. Existing custom limits are kept; the former default of
+10 upgrades to all due words once. Selected reviews use the whole selection.
 **Practise endlessly** keeps the same exercises and quiz spacing until you press
 **Escape** or End session. It starts with due words, then revisits your notebook as
 extra practice, choosing another set using your latest performance. **Endless review**
@@ -130,11 +131,15 @@ missing or sounds wrong. The popup offers other Cambridge accents, then
 [Oxford Learner’s Dictionaries](https://www.oxfordlearnersdictionaries.com/about/english/pronunciation_english),
 [Wiktionary](https://en.wiktionary.org/), and the
 [Free Dictionary API](https://dictionaryapi.dev/), which can locate additional
-Wikimedia Commons recordings. Only exact-word matches are offered. Listen to the
-preview, confirm it says the word correctly, then choose **Use this voice**.
-**Reject & try next voice** remembers rejected clips across visits, including the same
-recording found through another source. **Search again including rejected voices**
-lets you reconsider them. Closing the popup leaves your recording unchanged.
+Wikimedia Commons recordings. Only exact-word matches are offered. Use the
+list to compare every available voice. Each recording has one **Play** button and a
+selection control. Listen to as many as you like, select your preferred voice, confirm
+it says the word correctly, then choose **Keep selected voice**. You do not need to
+reject any voice to hear another. Repeated recordings found through different sources
+appear once. **Search again, including previously rejected voices** also restores voices
+hidden by earlier versions. Closing the popup leaves your recording unchanged.
+New words with missing Cambridge audio prompt you to find alternatives or **Skip for now**,
+including words added from essay flags.
 
 An approved alternative applies to this word regardless of the global accent setting,
 and is enabled for audio-only practice. Its source, speaker, and available license
@@ -152,7 +157,9 @@ privately cached by their revision so an uploaded replacement uses a fresh URL.
 In **Settings → Play audio when a task opens**, choose automatic playback separately
 for sentence spelling, spelling from a meaning, audio-only spelling, meaning quizzes,
 word drills, and correction practice. Audio-only playback starts enabled; the other
-tasks start disabled. Only checked, unflagged recordings play automatically. Turning
+tasks start disabled. Available, unflagged recordings can play automatically in clue
+exercises and drills.
+Unchecked recordings remain excluded from audio-only questions. Turning
 it off leaves **Listen** and **Alt+P** available. The **Playback volume** slider controls
 practice audio and previews, including mute.
 Settings prompt you to save or discard changes before leaving the page. Changing a
@@ -266,17 +273,22 @@ after ten seconds and keeps your pasted text.
 The app also accepts a Markdown reply containing one fenced JSON block. Import validates
 all entries before changing anything, rejects unexpected/duplicate words and unsuitable
 sentences, and fills empty fields while keeping your edits. Partial replies leave omitted
-words queued; repeated imports do not overwrite prepared words. Flagged meaning imports
-replace the definition and quiz options while preserving other saved material. Explicit
+words queued; repeated imports do not overwrite prepared words. Flagged clue imports
+replace only the flagged example and/or meaning, with new quiz options for corrected
+meanings, while preserving other saved material. Explicit
 re-evaluation replaces meanings, sentences, tips, and quiz options after preview. Replies
 exported before a newer edit or flag change are skipped. Keep the same notebook
 (database) for export and import: it records which words belong to each batch.
 
-**Wrong meaning?** during practice queues that word for correction and excludes its
-definition from meaning quizzes and definition clues. Flagging before answering lets you
-skip the question without recording an attempt. Fix it with **Prepare now**, an exported
-prompt, or a manual definition edit; the word editor also lets you clear the flag. Flagged
-meanings wait for an explicit request rather than triggering automatic API batches.
+**Unhelpful example?** and **Unclear or wrong meaning?** during practice queue the
+respective clue for improvement. The word editor has the same controls. A flagged
+example is excluded from sentence questions; a flagged meaning is excluded from
+definition clues and meaning quizzes. Flagging the active clue before answering lets
+you skip without recording an attempt. The next API preparation batch or exported LLM
+prompt asks for a specific meaning and a sentence with enough context to infer the
+missing word. Only flagged fields are replaced; other saved material and newer edits
+are kept. API batching still follows your preparation method, word threshold, and
+limits. You can also edit the clue manually or clear its flag in the editor.
 
 Gemini and exported prompts request three plausible, clearly incorrect meanings matched
 to each word's intended sense. Quizzes use these generated options when available; older
@@ -303,7 +315,7 @@ Use **Save & test connection** to check the route; this checks connectivity, not
 Your notebook, settings, request counters, preparation results, the latest 500 log events,
 and cached audio are in **`data/`**. Logs live in SQLite alongside the notebook.
 API keys, proxy credentials, backups, and personal data are excluded from Git.
-Backups contain words, attempts, pronunciation and meaning flags, and generated quiz
+Backups contain words, attempts, pronunciation and clue flags, and generated quiz
 options, both spelling schedules, the active scheduler, and the essay draft, but no keys
 or connection settings. Format-1 backups remain importable; a full format-2 restore into
 an empty notebook restores the scheduler choice. Merges keep the existing choice.

@@ -84,6 +84,7 @@
     // Only the deliberate Add action writes notebook words; no LLM result can do so.
     for(const row of rows) if(words.includes(normalize(row.corrected))) {row.selected=false;row.added=true;row.revision++;}
     remember();await refresh();
+    if(result.added.length) guarded(()=>checkAddedPronunciations(result.added));
     message(`${result.added.length} new ${result.added.length===1?'word':'words'} added${result.duplicates.length?` · ${result.duplicates.length} already in the notebook`:''}. Missing meanings and examples use your usual preparation settings.`);
   }
   async function exportPrompts() {
