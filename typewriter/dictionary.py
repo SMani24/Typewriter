@@ -6,6 +6,7 @@ from threading import Lock
 from urllib.parse import quote, urljoin, urlparse
 from bs4 import BeautifulSoup
 from .store import clean_word, contains_word
+from .audio_sources import AudioSources
 
 USER_AGENT = "Mozilla/5.0 (compatible; Typewriter personal dictionary lookup)"
 
@@ -14,6 +15,7 @@ class Dictionary:
     def __init__(self, store, network):
         self.store, self.network = store, network
         self._download_locks = {}
+        self.alternatives = AudioSources(store,network)
 
     def lookup(self, word, timeout=None):
         word = clean_word(word)
@@ -73,6 +75,8 @@ class Dictionary:
         if not word:
             raise KeyError("Word not found.")
         preferred = self.store.settings()["pronunciation_accent"]
+        if word["audio_alternative"] and not word["audio_file"]:
+            return {"id":word_id,"word":word["word"],"preferred":preferred,"uploaded":False,"chosen":True,"available":[],"alternative":None}
         if word["audio_file"]:
             return {"id":word_id,"word":word["word"],"preferred":preferred,"uploaded":True,"available":[],"alternative":None}
         try:
@@ -102,6 +106,8 @@ class Dictionary:
             if not path.is_file():
                 raise ValueError("Your uploaded recording is missing. Upload it again in the word editor.")
             return path
+        if word["audio_alternative"]:
+            return self.alternatives.recording(word["audio_alternative"])
         url = word["audio_urls"].get(accent)
         # Old notebooks stored one URL, using UK by default. Resolve US separately.
         if not word["audio_urls"] and accent == "uk":

@@ -50,7 +50,7 @@ def engine(db):
 def audio_eligible(word, settings):
     accent=word['pronunciation_accent'] or settings['pronunciation_accent']
     recording=word['audio_urls'].get(accent) if word['audio_urls'] else word['audio_url'] if accent=='uk' else ''
-    return bool(word['audio_verified'] and not word['audio_flagged'] and (word['audio_file'] or recording))
+    return bool(word['audio_verified'] and not word['audio_flagged'] and (word['audio_file'] or word.get('audio_alternative') or recording))
 
 
 def spelling_types(word, settings):

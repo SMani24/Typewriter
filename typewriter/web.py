@@ -162,6 +162,27 @@ def create_app(data_dir=None, keys_path=None, background=True):
     def pronunciation_choice(word_id):
         return jsonify(store.set_pronunciation(word_id,body().get("accent")))
 
+    @app.post("/api/words/<int:word_id>/pronunciation/alternatives")
+    def pronunciation_alternatives(word_id):
+        data=body()
+        return jsonify(dictionary.alternatives.options(word_id,data.get("provider"),data.get("reset",False)))
+
+    @app.get("/api/words/<int:word_id>/pronunciation/alternatives/<identity>/audio")
+    def preview_alternative(word_id,identity):
+        return send_file(dictionary.alternatives.preview(word_id,identity),max_age=0)
+
+    @app.post("/api/words/<int:word_id>/pronunciation/alternatives/<identity>/reject")
+    def reject_alternative(word_id,identity):
+        return jsonify(dictionary.alternatives.reject(word_id,identity))
+
+    @app.post("/api/words/<int:word_id>/pronunciation/alternatives/<identity>/accept")
+    def accept_alternative(word_id,identity):
+        return jsonify(dictionary.alternatives.accept(word_id,identity))
+
+    @app.delete("/api/words/<int:word_id>/pronunciation/alternative")
+    def clear_alternative(word_id):
+        return jsonify(dictionary.alternatives.clear(word_id))
+
     @app.post("/api/words/<int:word_id>/audio")
     def upload_audio(word_id):
         file = request.files.get("audio")

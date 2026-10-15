@@ -7,6 +7,7 @@ import unicodedata
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from .audio_metadata import selected_audio as chosen_audio, save_selected, validate_record
 from .models import normalize_model
 from .scheduling import SchedulingStore, card_for, save_card, engine, adapter, utc, Rating, CONFIG_ID
 
@@ -255,10 +256,11 @@ class Store(SchedulingStore):
                 w["sources"] = json.loads(w["sources"])
                 w["distractors"] = json.loads(w["distractors"])
                 w["audio_urls"] = json.loads(w["audio_urls"])
-                w["audio_revision"] = hashlib.sha256(json.dumps([w["audio_file"],w["audio_urls"],w["audio_url"],w["audio_flagged"]],sort_keys=True).encode()).hexdigest()[:16]
+                w["audio_alternative"] = chosen_audio(db,w)
+                w["audio_revision"] = hashlib.sha256(json.dumps([w["audio_file"],w["audio_urls"],w["audio_url"],w["audio_flagged"],w["audio_alternative"]],sort_keys=True).encode()).hexdigest()[:16]
                 selected_accent = w["pronunciation_accent"] or accent
                 selected_audio = w["audio_urls"].get(selected_accent) if w["audio_urls"] else w["audio_url"] if selected_accent == "uk" else ""
-                w["audio_eligible"] = bool(w["audio_verified"] and not w["audio_flagged"] and (w["audio_file"] or selected_audio))
+                w["audio_eligible"] = bool(w["audio_verified"] and not w["audio_flagged"] and (w["audio_file"] or w["audio_alternative"] or selected_audio))
                 w["clue"] = blank_sentence(w["word"], w["sentence"]) if contains_word(w["word"], w["sentence"]) else ""
                 w["accuracy"] = round(100 * w["correct_reviews"] / w["reviews"]) if w["reviews"] else None
                 card = card_for(db,w)
@@ -365,6 +367,7 @@ class Store(SchedulingStore):
             if item["definition"] != original["definition"]:
                 db.execute("UPDATE words SET meaning_flagged=0,distractors='[]' WHERE id=?", (word_id,))
             if renamed:
+                db.execute("DELETE FROM cache WHERE name=?",("chosen-audio:"+str(word_id),))
                 stamp = now()
                 db.execute("DELETE FROM spelling_schedules WHERE word_id=?",(word_id,))
                 # Retain the answer history, but start learning the corrected target afresh.
@@ -372,7 +375,7 @@ class Store(SchedulingStore):
                 reset=db.execute("SELECT * FROM words WHERE id=?",(word_id,)).fetchone()
                 cursor=db.execute("SELECT COALESCE(MAX(id),0) FROM attempts WHERE word_id=?",(word_id,)).fetchone()[0]
                 save_card(db,card_for(db,reset),cursor)
-        if (audio != original["audio_url"] or audio_urls != original["audio_urls"]) and not original["audio_file"]:
+        if (audio != original["audio_url"] or audio_urls != original["audio_urls"]) and not (original["audio_file"] or original["audio_alternative"]):
             with self.db() as db:
                 db.execute("UPDATE words SET audio_verified=0 WHERE id=?", (word_id,))
         return self.word(word_id)
@@ -389,7 +392,7 @@ class Store(SchedulingStore):
         old_url = word["audio_urls"].get(word["pronunciation_accent"] or preferred) or word["audio_url"]
         new_url = urls.get(accent or preferred, word["audio_url"] if keep_legacy and (accent or preferred) == "uk" else "")
         with self.db() as db:
-            db.execute("UPDATE words SET pronunciation_accent=?,audio_urls=?,audio_url=?,audio_verified=? WHERE id=?", (accent,json.dumps(urls),new_url,int(bool(word["audio_verified"] and (word["audio_file"] or old_url == new_url))),word_id))
+            db.execute("UPDATE words SET pronunciation_accent=?,audio_urls=?,audio_url=?,audio_verified=? WHERE id=?", (accent,json.dumps(urls),new_url,int(bool(word["audio_verified"] and (word["audio_file"] or word["audio_alternative"] or old_url == new_url))),word_id))
         return self.word(word_id)
 
     def set_audio(self, word_id, *, flagged=None, verified=None, file=None):
@@ -407,6 +410,8 @@ class Store(SchedulingStore):
             updates["audio_file"] = file
         if updates:
             with self.db() as db:
+                if file:
+                    db.execute("DELETE FROM cache WHERE name=?",("chosen-audio:"+str(word_id),))
                 db.execute("UPDATE words SET " + ",".join(k + "=?" for k in updates) + " WHERE id=?", (*updates.values(), word_id))
         return self.word(word_id)
 
@@ -653,16 +658,21 @@ class Store(SchedulingStore):
             words = [dict(r) for r in db.execute("SELECT * FROM words")]
             attempts = [dict(r) for r in db.execute("SELECT * FROM attempts")]
             scheduling = self.export_scheduling(db,words)
+            for word in words:
+                alternative=chosen_audio(db,word)
+                if alternative:word["audio_alternative"]=alternative
         for word in words:
             word["distractors"] = json.loads(word["distractors"])
             word["audio_urls"] = json.loads(word["audio_urls"])
-        return {"format": "typewriter", "version": 2, "attempt_metadata_version":2, "scheduling":scheduling, "exported": now(), "words": words, "attempts": attempts, "essay": self.essay()}
+        return {"format": "typewriter", "version": 2, "attempt_metadata_version":2, "audio_metadata_version":1, "scheduling":scheduling, "exported": now(), "words": words, "attempts": attempts, "essay": self.essay()}
 
     def import_backup(self, data):
         if not isinstance(data, dict) or data.get("format") != "typewriter" or data.get("version") not in (1,2):
             raise ValueError("Choose a Typewriter backup file.")
         if data.get("attempt_metadata_version",1) not in (1,2):
             raise ValueError("This backup uses a newer practice-context format. Update Typewriter before importing it.")
+        if data.get("audio_metadata_version",1) != 1:
+            raise ValueError("This backup uses newer pronunciation metadata. Update Typewriter before importing it.")
         words, attempts = data.get("words"), data.get("attempts")
         essay = self.validate_essay(data["essay"]) if "essay" in data else None
         if not isinstance(words, list) or not isinstance(attempts, list) or len(words) > 10000 or len(attempts) > 100000:
@@ -701,6 +711,10 @@ class Store(SchedulingStore):
             if not isinstance(audio_url, str) or audio_url and not re.fullmatch(r"https://dictionary\.cambridge\.org/[^\s]+", audio_url):
                 raise ValueError("Invalid pronunciation URL in backup.")
             validate_audio_urls(w.get("audio_urls", {}))
+            if "audio_alternative" in w:
+                w["audio_alternative"]=validate_record(w["audio_alternative"],item["word"])
+                if not w["audio_alternative"].get("approved_at"):
+                    raise ValueError("Missing pronunciation approval in backup.")
             if w.get("pronunciation_accent", "") not in ("", "uk", "us"):
                 raise ValueError("Invalid pronunciation choice in backup.")
             for field in ("recall_reset_at", "drill_completed_at"):
@@ -743,6 +757,9 @@ class Store(SchedulingStore):
                 db.execute("UPDATE words SET recall_reset_at=? WHERE id=?", (original.get("recall_reset_at", ""),cur.lastrowid))
                 db.execute("UPDATE words SET drill_completed_at=? WHERE id=?", (original.get("drill_completed_at", ""),cur.lastrowid))
                 db.execute("UPDATE words SET meaning_flagged=?,distractors=? WHERE id=?", (original.get("meaning_flagged", 0), json.dumps(original.get("distractors", [])), cur.lastrowid))
+                if original.get("audio_alternative"):
+                    imported_word=db.execute("SELECT * FROM words WHERE id=?",(cur.lastrowid,)).fetchone()
+                    save_selected(db,imported_word,original["audio_alternative"])
                 id_map[original["id"]] = cur.lastrowid
                 added += 1
             for a in normalized_attempts:
