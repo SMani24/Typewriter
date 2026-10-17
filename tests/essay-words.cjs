@@ -59,6 +59,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
       },{url,method,data});
     }
     const baseline=(await api('/export')).attempts.length;
+    assert(await page.evaluate(async()=>{const row=document.querySelector('#word-list .library-row');await refresh();return row===document.querySelector('#word-list .library-row');}),'Unchanged notebook rows survive a refresh');
     await page.locator('.nav-item[data-page="essay"]').click();const area=page.locator('#essay-body');await area.waitFor({state:'visible'});
     await area.fill('1. First item');await area.press('End');await area.press('Enter');assert.equal(await area.inputValue(),'1. First item\n2. ');
     await area.type('Second item');await area.press('Tab');assert.equal(await area.inputValue(),'1. First item\n    2. Second item');await area.press('Shift+Tab');assert.equal(await area.inputValue(),'1. First item\n2. Second item');

@@ -3,6 +3,13 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+// Reuse unchanged UI regions instead of recreating thousands of hidden notebook nodes.
+const renderedMarkup = new WeakMap();
+function setMarkup(element, markup) {
+  if (renderedMarkup.get(element) === markup) return;
+  element.innerHTML = markup;
+  renderedMarkup.set(element, markup);
+}
 const paths = {
   sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>',
   book:'<path d="M12 5v15M3 4q5-1 9 2 4-3 9-2v15q-5-1-9 2-4-3-9-2Z"/>',
@@ -159,10 +166,10 @@ function render() {
   const accuracy = progress.reviews ? Math.round(100 * progress.correct / progress.reviews) + '%' : '—';
   const confident = state.words.filter(w => ['Confident','Reviewing'].includes(w.state)).length;
   $('#nav-due').textContent = due.length;
-  $('#today-stats').innerHTML = stat('Words ready for review', due.length, due.length ? 'A fresh chance to remember' : 'A little breathing room', 'sun') + stat('Unaided answer accuracy', accuracy, progress.reviews ? 'Lifetime, including extra practice' : 'Your first review starts here', 'chart') + stat('Words growing familiar', confident, `Out of ${state.words.length} words in your notebook`, 'leaf');
+  setMarkup($('#today-stats'), stat('Words ready for review', due.length, due.length ? 'A fresh chance to remember' : 'A little breathing room', 'sun') + stat('Unaided answer accuracy', accuracy, progress.reviews ? 'Lifetime, including extra practice' : 'Your first review starts here', 'chart') + stat('Words growing familiar', confident, `Out of ${state.words.length} words in your notebook`, 'leaf'));
   $('#hero-note').textContent = due.length ? state.settings.review_session_size ? `Up to ${Math.min(due.length,state.settings.review_session_size)} words · Or keep going endlessly` : `All ${due.length} words ready for review · Or keep going endlessly` : 'No due spelling words · Endless review is extra practice';
   const next = (due.length ? due : state.words).slice(0,4);
-  $('#next-words').innerHTML = next.length ? next.map(w => `<div class="next-word"><span class="word-initial">${escapeHtml(w.word[0])}</span><div><div class="next-word-name">${escapeHtml(w.word)}</div><div class="next-word-definition">${escapeHtml(w.definition || 'A word waiting for its story')}</div></div>${badge(w)}<button class="icon-button" data-drill="${w.id}" aria-label="Drill ${escapeHtml(w.word)}" ${w.practice_ready===false?'disabled':''}>${icon('arrow')}</button></div>`).join('') : empty('Start with a word you know.', 'Add a few words from your writing, or try our starter collection.', 'starter', 'Add starter words');
+  setMarkup($('#next-words'), next.length ? next.map(w => `<div class="next-word"><span class="word-initial">${escapeHtml(w.word[0])}</span><div><div class="next-word-name">${escapeHtml(w.word)}</div><div class="next-word-definition">${escapeHtml(w.definition || 'A word waiting for its story')}</div></div>${badge(w)}<button class="icon-button" data-drill="${w.id}" aria-label="Drill ${escapeHtml(w.word)}" ${w.practice_ready===false?'disabled':''}>${icon('arrow')}</button></div>`).join('') : empty('Start with a word you know.', 'Add a few words from your writing, or try our starter collection.', 'starter', 'Add starter words'));
   renderLibrary();
   renderProgress();
   renderQueue();
@@ -176,7 +183,7 @@ function render() {
 function renderDrillSuggestions() {
   const words = state.words.filter(w=>w.practice_ready!==false && w.drill_recommended).sort(TypewriterReview.compareDrillPriority).slice(0,3);
   $('#drill-suggestions').hidden = !words.length || !state.settings.drill_enabled;
-  $('#drill-suggestions').innerHTML = `<span class="eyebrow">WORTH A DRILL</span>${words.map(w=>`<button class="drill-suggestion" data-drill="${w.id}"><span>${escapeHtml(w.word)}<small>${w.recent_mistakes} misses in ${w.recent_reviews} recent reviews${w.drill_cooling ? ' · Recently drilled' : ''}</small></span>${icon('arrow')}</button>`).join('')}<p class="field-note">A drill with 10+ correct repetitions and at least 80% accuracy lowers its drill priority by 75% for 24 hours. A missed or hinted spelling review restores full priority. Three consecutive correct unaided reviews clear the suggestion.</p>`;
+  setMarkup($('#drill-suggestions'), `<span class="eyebrow">WORTH A DRILL</span>${words.map(w=>`<button class="drill-suggestion" data-drill="${w.id}"><span>${escapeHtml(w.word)}<small>${w.recent_mistakes} misses in ${w.recent_reviews} recent reviews${w.drill_cooling ? ' · Recently drilled' : ''}</small></span>${icon('arrow')}</button>`).join('')}<p class="field-note">A drill with 10+ correct repetitions and at least 80% accuracy lowers its drill priority by 75% for 24 hours. A missed or hinted spelling review restores full priority. Three consecutive correct unaided reviews clear the suggestion.</p>`);
 }
 function visibleWords() {
   const query = $('#word-search').value.toLowerCase().trim();
@@ -184,7 +191,7 @@ function visibleWords() {
 }
 function renderLibrary() {
   const words = visibleWords();
-  $('#word-list').innerHTML = words.length ? words.map(w => `<div class="library-row"><div class="library-word"><input type="checkbox" data-select="${w.id}" aria-label="Select ${escapeHtml(w.word)}" ${selected.has(w.id) ? 'checked' : ''}><div><strong>${escapeHtml(w.word)} ${badge(w)}</strong><p title="${escapeHtml(w.definition || w.enrichment_error || 'Waiting for preparation')}">${escapeHtml(w.definition || (w.enrichment_error ? 'Preparation paused — try again or edit' : 'Waiting for a meaning'))}${w.tag ? ` · ${escapeHtml(w.tag)}` : ''}</p></div></div><div class="recall" title="Lifetime unaided answers for this spelling, including extra practice">${w.accuracy === null ? '—' : w.accuracy + '%'}<small>${w.reviews ? w.reviews + ' reviews' : 'Not reviewed'}</small></div><div class="due-date">${w.practice_ready===false ? 'Needs preparing' : w.is_due ? '<strong>Ready today</strong>' : escapeHtml(new Date(w.due).toLocaleDateString(undefined,{month:'short',day:'numeric'}))}</div><div class="library-actions"><button class="icon-button" data-drill="${w.id}" aria-label="Drill ${escapeHtml(w.word)}" ${w.practice_ready===false?'disabled':''}>${icon('keyboard')}</button><button class="icon-button" data-edit="${w.id}" aria-label="Edit ${escapeHtml(w.word)}">${icon('edit')}</button></div></div>`).join('') : empty(state.words.length ? 'No words here just yet.' : 'Every notebook begins somewhere.', state.words.length ? 'Try a different search or filter.' : 'Add words from your essays, reading, or everyday life.', state.words.length ? '' : 'add', 'Add your first words');
+  setMarkup($('#word-list'), words.length ? words.map(w => `<div class="library-row"><div class="library-word"><input type="checkbox" data-select="${w.id}" aria-label="Select ${escapeHtml(w.word)}" ${selected.has(w.id) ? 'checked' : ''}><div><strong>${escapeHtml(w.word)} ${badge(w)}</strong><p title="${escapeHtml(w.definition || w.enrichment_error || 'Waiting for preparation')}">${escapeHtml(w.definition || (w.enrichment_error ? 'Preparation paused — try again or edit' : 'Waiting for a meaning'))}${w.tag ? ` · ${escapeHtml(w.tag)}` : ''}</p></div></div><div class="recall" title="Lifetime unaided answers for this spelling, including extra practice">${w.accuracy === null ? '—' : w.accuracy + '%'}<small>${w.reviews ? w.reviews + ' reviews' : 'Not reviewed'}</small></div><div class="due-date">${w.practice_ready===false ? 'Needs preparing' : w.is_due ? '<strong>Ready today</strong>' : escapeHtml(new Date(w.due).toLocaleDateString(undefined,{month:'short',day:'numeric'}))}</div><div class="library-actions"><button class="icon-button" data-drill="${w.id}" aria-label="Drill ${escapeHtml(w.word)}" ${w.practice_ready===false?'disabled':''}>${icon('keyboard')}</button><button class="icon-button" data-edit="${w.id}" aria-label="Edit ${escapeHtml(w.word)}">${icon('edit')}</button></div></div>`).join('') : empty(state.words.length ? 'No words here just yet.' : 'Every notebook begins somewhere.', state.words.length ? 'Try a different search or filter.' : 'Add words from your essays, reading, or everyday life.', state.words.length ? '' : 'add', 'Add your first words'));
   $('#selection-bar').hidden = selected.size === 0;
   $('#selection-count').textContent = `${selected.size} word${selected.size === 1 ? '' : 's'} selected`;
   $('#select-all').checked = words.length > 0 && words.every(w => selected.has(w.id));
@@ -202,12 +209,12 @@ function renderQueue() {
   for (const el of [$('#queue-banner'), $('#today-preparation')]) {
     el.classList.toggle('busy', job.busy);
     el.classList.toggle('failed', !!job.error && (usesApi || job.busy));
-    el.innerHTML = content;
+    setMarkup(el, content);
   }
   $('#today-preparation').hidden = !job.busy && (!usesApi || !job.error && !job.total);
   $('#settings-pending').textContent = usesApi || job.busy ? `${job.message}${job.error ? ' ' + job.error : ''}` : `${job.pending} words need material · ${usesApi ? 'Gemini API' : state.settings.preparation_method === 'offline' ? 'prompt export/import' : 'manual entry'}`;
   $$('[data-action="prepare-all"], [data-action="prepare-selected"]').forEach(b => {b.disabled = (job.busy && state.settings.preparation_method === 'api') || !job.pending;b.hidden = state.settings.preparation_method === 'manual';});
-  $('#app-log').innerHTML = state.logs.length ? state.logs.map(r => `<div class="log-entry ${escapeHtml(r.level)}"><time>${escapeHtml(new Date(r.created).toLocaleString())}</time><span>${escapeHtml(r.message)}</span></div>`).join('') : '<p class="muted small">No events yet. Preparation results will appear here.</p>';
+  setMarkup($('#app-log'), state.logs.length ? state.logs.map(r => `<div class="log-entry ${escapeHtml(r.level)}"><time>${escapeHtml(new Date(r.created).toLocaleString())}</time><span>${escapeHtml(r.message)}</span></div>`).join('') : '<p class="muted small">No events yet. Preparation results will appear here.</p>');
 }
 function renderPracticeModes() {
   $$('[data-action="review"], [data-action="review-selected"], [data-action="review-endless"], [data-action="review-selected-endless"]').forEach(b => b.hidden = !state.settings.review_enabled);
@@ -218,12 +225,12 @@ function renderProgress() {
   const p = state.progress;
   $('#meaning-progress').textContent = p.meanings ? `${p.meanings} meaning quizzes · ${Math.round(100*p.meanings_correct/p.meanings)}% correct · separate from spelling recall` : 'Meaning quiz results will appear here, separate from spelling recall.';
   $('#spaced-progress').textContent = `${p.spaced_reviews || 0} spaced spelling recalls · ${p.spaced_reviews ? Math.round(100*p.spaced_correct/p.spaced_reviews)+'% correct' : 'waiting for your first due, unaided answer'} · First due unaided answer per word per UTC day, since this upgrade. Lifetime totals below include extra practice and older history.`;
-  $('#progress-stats').innerHTML = stat('Unaided review attempts',p.reviews,'First answers, without revealed spelling','book') + stat('Correct unaided answers',p.correct,'Including extra practice and older history','check') + stat('Drill repetitions',p.drills,'Focused practice, counted separately','keyboard');
+  setMarkup($('#progress-stats'), stat('Unaided review attempts',p.reviews,'First answers, without revealed spelling','book') + stat('Correct unaided answers',p.correct,'Including extra practice and older history','check') + stat('Drill repetitions',p.drills,'Focused practice, counted separately','keyboard'));
   const days = Array.from({length:7},(_,i) => {const d = new Date(); d.setUTCDate(d.getUTCDate() - (6-i)); return d.toISOString().slice(0,10);});
   const maximum = Math.max(5,...p.history.map(d => d.total));
-  $('#activity-chart').innerHTML = days.map(day => {const data = p.history.find(h => h.day === day) || {total:0,correct:0};return `<div class="chart-day"><span class="chart-value">${data.total || '·'}</span><div class="bar-track"><div class="bar-total" data-height="${Math.max(3,128 * data.total / maximum)}"><div class="bar-correct" data-height="${data.total ? 100 * data.correct / data.total : 0}" data-percent="true"></div></div></div><span>${new Date(day + 'T12:00:00Z').toLocaleDateString(undefined,{weekday:'short',timeZone:'UTC'})}</span></div>`;}).join('');
+  setMarkup($('#activity-chart'), days.map(day => {const data = p.history.find(h => h.day === day) || {total:0,correct:0};return `<div class="chart-day"><span class="chart-value">${data.total || '·'}</span><div class="bar-track"><div class="bar-total" data-height="${Math.max(3,128 * data.total / maximum)}"><div class="bar-correct" data-height="${data.total ? 100 * data.correct / data.total : 0}" data-percent="true"></div></div></div><span>${new Date(day + 'T12:00:00Z').toLocaleDateString(undefined,{weekday:'short',timeZone:'UTC'})}</span></div>`;}).join(''));
   $$('[data-height]', $('#activity-chart')).forEach(el => el.style.height = el.dataset.height + (el.dataset.percent ? '%' : 'px'));
-  $('#mistake-list').innerHTML = p.mistakes.length ? p.mistakes.map(m => `<div class="mistake"><div><strong>${escapeHtml(m.word)}</strong><small>You typed “${escapeHtml(m.answer)}”</small></div><span class="mistake-count">${m.count} time${m.count === 1 ? '' : 's'}</span></div>`).join('') : empty('A fresh page.', 'Your recurring misspellings will appear here after you practise.');
+  setMarkup($('#mistake-list'), p.mistakes.length ? p.mistakes.map(m => `<div class="mistake"><div><strong>${escapeHtml(m.word)}</strong><small>You typed “${escapeHtml(m.answer)}”</small></div><span class="mistake-count">${m.count} time${m.count === 1 ? '' : 's'}</span></div>`).join('') : empty('A fresh page.', 'Your recurring misspellings will appear here after you practise.'));
 }
 function fillSettings() {
   const form = $('#settings-form');
@@ -280,7 +287,7 @@ function updateQuizRhythm(changed) {
 function renderKeys() {
   const keys = state.enrichment.keys;
   $('#key-count').textContent = `${keys.length} key${keys.length === 1 ? '' : 's'} configured`;
-  $('#key-usage').innerHTML = keys.length ? keys.map(k => `<div class="key-row"><span class="status-dot"></span><span>${escapeHtml(k.label)}</span><span class="badge ${k.available ? 'confident' : 'pending'}">${k.available ? 'Ready' : escapeHtml(k.reason || 'Budget reached')}</span><span>${k.requests} / ${k.budget} requests</span></div>`).join('') : '<p class="muted small">Add keys below to enable optional word preparation. Manual practice works without them.</p>';
+  setMarkup($('#key-usage'), keys.length ? keys.map(k => `<div class="key-row"><span class="status-dot"></span><span>${escapeHtml(k.label)}</span><span class="badge ${k.available ? 'confident' : 'pending'}">${k.available ? 'Ready' : escapeHtml(k.reason || 'Budget reached')}</span><span>${k.requests} / ${k.budget} requests</span></div>`).join('') : '<p class="muted small">Add keys below to enable optional word preparation. Manual practice works without them.</p>');
 }
 function renderSchedulerSetting() {
   const active=state.settings.scheduler || 'legacy';
