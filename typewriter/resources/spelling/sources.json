@@ -1,0 +1,23 @@
+{
+  "project": "English Speller Database",
+  "commit": "7f2f4078354752045ee16a041605686561122185",
+  "words": 110087,
+  "sources": {
+    "en_US.txt": {
+      "url": "https://raw.githubusercontent.com/en-wl/wordlist-diff/7f2f4078354752045ee16a041605686561122185/en_US.txt",
+      "sha256": "45a4dd29b86234fbabce26f33272466bb5572db6fdca1470c4f218e6b666a56d"
+    },
+    "en_GB-ise.txt": {
+      "url": "https://raw.githubusercontent.com/en-wl/wordlist-diff/7f2f4078354752045ee16a041605686561122185/en_GB-ise.txt",
+      "sha256": "3febf4057b95dd654e8c9421197fd8c08cf8e7ae9c4a457228da9ec36af6083c"
+    },
+    "en_GB-ize.txt": {
+      "url": "https://raw.githubusercontent.com/en-wl/wordlist-diff/7f2f4078354752045ee16a041605686561122185/en_GB-ize.txt",
+      "sha256": "dc8f5a35bd0afd61cd80b045d724b13c1491fe5440bf9cdd997882bf62096ec0"
+    },
+    "Copyright": {
+      "url": "https://raw.githubusercontent.com/en-wl/wordlist-diff/7f2f4078354752045ee16a041605686561122185/Copyright",
+      "sha256": "71bffd4b74ad47fff01c8b3c666e77da92737854e568850d8728024e0a53f304"
+    }
+  }
+}
