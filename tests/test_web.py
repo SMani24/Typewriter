@@ -67,11 +67,13 @@ class WebTests(unittest.TestCase):
         self.app.extensions['store'].edit_word(word_id,{'source':'Cambridge','audio_url':'https://dictionary.cambridge.org/other.mp3'})
         self.assertTrue(self.app.extensions['store'].word(word_id)['audio_eligible'])
         with self.client.get(f'/api/words/{word_id}/audio') as response:
-            self.assertEqual(response.data,content)
+            served=response.data
+            self.assertTrue(served)
+            self.assertEqual((self.app.extensions["store"].path.parent/"audio"/self.app.extensions["store"].word(word_id)["audio_file"]).read_bytes(),content)
         self.client.patch(f'/api/words/{word_id}/audio',json={'flagged':True},headers=self.headers)
         self.assertEqual(self.client.get(f'/api/words/{word_id}/audio').status_code,400)
         with self.client.get(f'/api/words/{word_id}/audio?preview=1') as response:
-            self.assertEqual(response.data,content)
+            self.assertEqual(response.data,served)
 
     def test_prompt_export_roundtrip_works_without_api_keys(self):
         import io,json,zipfile

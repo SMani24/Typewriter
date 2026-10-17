@@ -35,7 +35,7 @@ document.addEventListener('focusin',event=>{
 let settingsBaseline = null, pendingSettingsPage = null, schedulerPreview = null, sessionStarting = false, sessionHeartbeat = null, lastSessionEnd = Promise.resolve(), lastEndingSession = null;
 let pronunciationNotices = [], pronunciationChecking = false;
 let preparationPreviewVersion = 0, preparationPreviewTimer, preparationPreviewController = null, preparationApplying = false, stalePreparationIds = [];
-const preparationPending = word => word.status !== 'ready' || !!word.meaning_flagged || !!word.sentence_flagged;
+const preparationPending = word => word.status !== 'ready' || !!word.meaning_flagged || !!word.sentence_flagged || !!word.preparation_queue;
 const token = $('meta[name="typewriter-token"]').content;
 
 async function api(path, method = 'GET', data, signal) {
@@ -141,7 +141,8 @@ function navigate(page, force = false) {
 }
 function badge(word) {
   const type = word.state.toLowerCase();
-  return `<span class="badge ${type}">${escapeHtml(word.state)}</span>${word.meaning_flagged ? '<span class="badge new">Meaning flagged</span>' : ''}${word.sentence_flagged ? '<span class="badge new">Example flagged</span>' : ''}${word.drill_recommended && state.settings.drill_enabled ? '<span class="badge learning">Worth a drill</span>' : ''}`;
+  if(word.preparation_queue)return `<span class="badge pending">${word.preparation_queue==='manual'?'Manual queue':'LLM queue'}</span>`;
+  return `<span class="badge ${type}">${escapeHtml(word.state)}</span>${word.meaning_flagged ? '<span class="badge new">Meaning flagged</span>' : ''}${word.sentence_flagged ? '<span class="badge new">Example flagged</span>' : ''}${word.essay_pending ? '<span class="badge learning">Essay mistake · review again</span>' : ''}${word.drill_recommended && state.settings.drill_enabled ? '<span class="badge learning">Worth a drill</span>' : ''}`;
 }
 function dueWords() {
   const meaningOnly = state.settings.meaning_enabled && !['sentence_enabled','definition_enabled','audio_enabled'].some(k=>state.settings[k]);
@@ -161,7 +162,7 @@ function render() {
   $('#today-stats').innerHTML = stat('Words ready for review', due.length, due.length ? 'A fresh chance to remember' : 'A little breathing room', 'sun') + stat('Unaided answer accuracy', accuracy, progress.reviews ? 'Lifetime, including extra practice' : 'Your first review starts here', 'chart') + stat('Words growing familiar', confident, `Out of ${state.words.length} words in your notebook`, 'leaf');
   $('#hero-note').textContent = due.length ? state.settings.review_session_size ? `Up to ${Math.min(due.length,state.settings.review_session_size)} words · Or keep going endlessly` : `All ${due.length} words ready for review · Or keep going endlessly` : 'No due spelling words · Endless review is extra practice';
   const next = (due.length ? due : state.words).slice(0,4);
-  $('#next-words').innerHTML = next.length ? next.map(w => `<div class="next-word"><span class="word-initial">${escapeHtml(w.word[0])}</span><div><div class="next-word-name">${escapeHtml(w.word)}</div><div class="next-word-definition">${escapeHtml(w.definition || 'A word waiting for its story')}</div></div>${badge(w)}<button class="icon-button" data-drill="${w.id}" aria-label="Drill ${escapeHtml(w.word)}">${icon('arrow')}</button></div>`).join('') : empty('Start with a word you know.', 'Add a few words from your writing, or try our starter collection.', 'starter', 'Add starter words');
+  $('#next-words').innerHTML = next.length ? next.map(w => `<div class="next-word"><span class="word-initial">${escapeHtml(w.word[0])}</span><div><div class="next-word-name">${escapeHtml(w.word)}</div><div class="next-word-definition">${escapeHtml(w.definition || 'A word waiting for its story')}</div></div>${badge(w)}<button class="icon-button" data-drill="${w.id}" aria-label="Drill ${escapeHtml(w.word)}" ${w.practice_ready===false?'disabled':''}>${icon('arrow')}</button></div>`).join('') : empty('Start with a word you know.', 'Add a few words from your writing, or try our starter collection.', 'starter', 'Add starter words');
   renderLibrary();
   renderProgress();
   renderQueue();
@@ -173,7 +174,7 @@ function render() {
   if (currentPage !== 'settings') {applyTextSize(state.settings.text_size);$$('audio').forEach(audio=>audio.volume = (state.settings.audio_volume ?? 100) / 100);}
 }
 function renderDrillSuggestions() {
-  const words = state.words.filter(w=>w.drill_recommended).sort(TypewriterReview.compareDrillPriority).slice(0,3);
+  const words = state.words.filter(w=>w.practice_ready!==false && w.drill_recommended).sort(TypewriterReview.compareDrillPriority).slice(0,3);
   $('#drill-suggestions').hidden = !words.length || !state.settings.drill_enabled;
   $('#drill-suggestions').innerHTML = `<span class="eyebrow">WORTH A DRILL</span>${words.map(w=>`<button class="drill-suggestion" data-drill="${w.id}"><span>${escapeHtml(w.word)}<small>${w.recent_mistakes} misses in ${w.recent_reviews} recent reviews${w.drill_cooling ? ' · Recently drilled' : ''}</small></span>${icon('arrow')}</button>`).join('')}<p class="field-note">A drill with 10+ correct repetitions and at least 80% accuracy lowers its drill priority by 75% for 24 hours. A missed or hinted spelling review restores full priority. Three consecutive correct unaided reviews clear the suggestion.</p>`;
 }
@@ -183,7 +184,7 @@ function visibleWords() {
 }
 function renderLibrary() {
   const words = visibleWords();
-  $('#word-list').innerHTML = words.length ? words.map(w => `<div class="library-row"><div class="library-word"><input type="checkbox" data-select="${w.id}" aria-label="Select ${escapeHtml(w.word)}" ${selected.has(w.id) ? 'checked' : ''}><div><strong>${escapeHtml(w.word)} ${badge(w)}</strong><p title="${escapeHtml(w.definition || w.enrichment_error || 'Waiting for preparation')}">${escapeHtml(w.definition || (w.enrichment_error ? 'Preparation paused — try again or edit' : 'Waiting for a meaning'))}${w.tag ? ` · ${escapeHtml(w.tag)}` : ''}</p></div></div><div class="recall" title="Lifetime unaided answers for this spelling, including extra practice">${w.accuracy === null ? '—' : w.accuracy + '%'}<small>${w.reviews ? w.reviews + ' reviews' : 'Not reviewed'}</small></div><div class="due-date">${w.is_due ? '<strong>Ready today</strong>' : escapeHtml(new Date(w.due).toLocaleDateString(undefined,{month:'short',day:'numeric'}))}</div><div class="library-actions"><button class="icon-button" data-drill="${w.id}" aria-label="Drill ${escapeHtml(w.word)}">${icon('keyboard')}</button><button class="icon-button" data-edit="${w.id}" aria-label="Edit ${escapeHtml(w.word)}">${icon('edit')}</button></div></div>`).join('') : empty(state.words.length ? 'No words here just yet.' : 'Every notebook begins somewhere.', state.words.length ? 'Try a different search or filter.' : 'Add words from your essays, reading, or everyday life.', state.words.length ? '' : 'add', 'Add your first words');
+  $('#word-list').innerHTML = words.length ? words.map(w => `<div class="library-row"><div class="library-word"><input type="checkbox" data-select="${w.id}" aria-label="Select ${escapeHtml(w.word)}" ${selected.has(w.id) ? 'checked' : ''}><div><strong>${escapeHtml(w.word)} ${badge(w)}</strong><p title="${escapeHtml(w.definition || w.enrichment_error || 'Waiting for preparation')}">${escapeHtml(w.definition || (w.enrichment_error ? 'Preparation paused — try again or edit' : 'Waiting for a meaning'))}${w.tag ? ` · ${escapeHtml(w.tag)}` : ''}</p></div></div><div class="recall" title="Lifetime unaided answers for this spelling, including extra practice">${w.accuracy === null ? '—' : w.accuracy + '%'}<small>${w.reviews ? w.reviews + ' reviews' : 'Not reviewed'}</small></div><div class="due-date">${w.practice_ready===false ? 'Needs preparing' : w.is_due ? '<strong>Ready today</strong>' : escapeHtml(new Date(w.due).toLocaleDateString(undefined,{month:'short',day:'numeric'}))}</div><div class="library-actions"><button class="icon-button" data-drill="${w.id}" aria-label="Drill ${escapeHtml(w.word)}" ${w.practice_ready===false?'disabled':''}>${icon('keyboard')}</button><button class="icon-button" data-edit="${w.id}" aria-label="Edit ${escapeHtml(w.word)}">${icon('edit')}</button></div></div>`).join('') : empty(state.words.length ? 'No words here just yet.' : 'Every notebook begins somewhere.', state.words.length ? 'Try a different search or filter.' : 'Add words from your essays, reading, or everyday life.', state.words.length ? '' : 'add', 'Add your first words');
   $('#selection-bar').hidden = selected.size === 0;
   $('#selection-count').textContent = `${selected.size} word${selected.size === 1 ? '' : 's'} selected`;
   $('#select-all').checked = words.length > 0 && words.every(w => selected.has(w.id));
@@ -193,7 +194,9 @@ function renderLibrary() {
 }
 function renderQueue() {
   const job = state.enrichment, usesApi = state.settings.preparation_method === 'api';
-  const message = job.busy || usesApi && job.total ? job.message : job.pending ? `${job.pending} words waiting to be prepared` : 'Your words are ready when you are.';
+  const queuedManual=state.words.filter(w=>w.preparation_queue==='manual').length;
+  const voice=state.voice_preparation;
+  const message = voice?.busy ? voice.message : job.busy || usesApi && job.total ? job.message : job.pending ? `${job.pending} words waiting to be prepared` : queuedManual ? `${queuedManual} words in the manual preparation queue` : 'Your words are ready when you are.';
   const detail = (usesApi || job.busy ? job.error : '') || (job.busy ? 'You can keep practising while this runs.' : job.pending ? state.settings.preparation_method === 'offline' ? `${job.pending} words queued for prompt export. No API calls are enabled.` : state.settings.preparation_method === 'manual' ? `${job.pending} words need material. Add definitions, sentences, and tips in the word editor.` : `${job.pending} words queued. Prepare a set now, or wait for an automatic batch of ${state.settings.batch_size}.` : 'Meanings, sentences, and tips can always be edited.');
   const content = `${icon('spark')}<div><span>${escapeHtml(message)}</span><p>${escapeHtml(detail)}</p></div>${job.pending && state.settings.preparation_method !== 'manual' ? `<button class="text-button" data-action="prepare-all" ${job.busy ? 'disabled' : ''}>${state.settings.preparation_method === 'offline' ? 'Export prompts' : 'Prepare now'}${icon('arrow')}</button>` : ''}`;
   for (const el of [$('#queue-banner'), $('#today-preparation')]) {
@@ -318,7 +321,7 @@ async function confirmScheduler() {
 }
 function settingsPayload() {
   const form = $('#settings-form'), result = {};
-  ['proxy_enabled','auto_ai','review_enabled','drill_enabled','sentence_enabled','definition_enabled','audio_enabled','meaning_enabled','autoplay_sentence','autoplay_definition','autoplay_audio','autoplay_meaning','autoplay_drill','autoplay_correction','clear_proxy_password'].forEach(k => result[k] = form.elements[k].checked);
+  ['proxy_enabled','auto_ai','review_enabled','drill_enabled','sentence_enabled','definition_enabled','audio_enabled','meaning_enabled','autoplay_sentence','autoplay_definition','autoplay_audio','autoplay_meaning','autoplay_drill','autoplay_correction','play_after_answer','clear_proxy_password'].forEach(k => result[k] = form.elements[k].checked);
   ['proxy_type','proxy_host','proxy_username','proxy_password','model','preparation_method','pronunciation_accent','text_size'].forEach(k => result[k] = form.elements[k].value.trim());
   ['proxy_port','batch_size','daily_budget','requests_per_minute','offline_batch_size','review_session_size','audio_volume'].forEach(k => result[k] = Number(form.elements[k].value));
   result.quiz_interval_mode = form.elements.quiz_interval_mode.value;
@@ -347,6 +350,9 @@ function openWord(id = null) {
   $('#word-save-note').innerHTML = id ? `<button type="button" class="text-button" data-action="delete-word">${icon('trash')}Remove word</button>` : 'Saved locally. Prepared at your pace.';
   $('#word-audio-panel').hidden = !id;
   $('#word-meaning-panel').hidden = !id;$('#word-sentence-panel').hidden = !id;
+  const queued=id && state.words.find(w=>w.id===id)?.preparation_queue;
+  $('#word-queue-note').hidden=!queued;$('#activate-word-control').hidden=!queued;$('#activate-word').checked=false;
+  $('#word-queue-note').textContent=queued ? 'This word is in the '+(queued==='manual'?'manual':'LLM')+' preparation queue, outside practice. Add your material, then select Save & add to practice when you are ready.' : '';
   if (id) {renderWordAudio();renderWordMeaning();}
   $('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();
   const form = $('#word-form');
@@ -385,6 +391,7 @@ async function saveWord(event) {
     const savedId = editingId;
     if (editingId) {
       const data = Object.fromEntries(['word','definition','sentence','tip','tag'].map(k => [k,form.elements[k].value]));
+      if(state.words.find(w=>w.id===editingId)?.preparation_queue)data.activate=$('#activate-word').checked;
       if (dictionaryApplied) {data.source = 'Cambridge';data.audio_url = dictionaryData.audio[state.settings.pronunciation_accent || 'uk'] || '';data.audio_urls = dictionaryData.audio;}
       result = await api('/words/' + editingId,'PATCH',data);
       toast('Word updated.');
@@ -450,7 +457,7 @@ function showDrillOptions(open) {
 }
 function filterDrillWords() {
   const query = $('#drill-search').value.trim().toLowerCase();
-  drillMatches = state.words.filter(w => w.word.includes(query)).sort((a,b) => Number(b.word.startsWith(query)) - Number(a.word.startsWith(query)) || TypewriterReview.compareDrillPriority(a,b));
+  drillMatches = state.words.filter(w => w.practice_ready!==false && w.word.includes(query)).sort((a,b) => Number(b.word.startsWith(query)) - Number(a.word.startsWith(query)) || TypewriterReview.compareDrillPriority(a,b));
   drillHighlight = Math.max(0, drillMatches.findIndex(w => w.word === query));
   $('#drill-word').value = drillMatches.find(w => w.word === query)?.id || '';
   showDrillOptions(true);
@@ -523,7 +530,7 @@ async function startReview(ids, endless = false, meaningOnly = false) {
 async function startDrill(event) {
   event.preventDefault();
   const word = state.words.find(w => w.id === Number($('#drill-word').value));
-  if (!word || !state.settings.drill_enabled) return;
+  if (!word || word.practice_ready===false || !state.settings.drill_enabled) return;
   if (sessionStarting) return;
   sessionStarting=true;
   let saved;
@@ -573,17 +580,18 @@ function audioEligible(word, settings) {
   return !!word.audio_verified && hasAudio(word,settings);
 }
 function exerciseTypes(word, settings = state.settings) {
+  if(word.practice_ready===false)return [];
   const types = [];
   if (settings.sentence_enabled && word.clue) types.push('sentence');
   if (settings.definition_enabled && word.definition && !word.meaning_flagged) types.push('definition');
   if (settings.audio_enabled && audioEligible(word,settings)) types.push('audio');
-  if (settings.meaning_enabled && word.definition && !word.meaning_flagged && (word.distractors.length === 3 || state.words.some(w => w.definition && !w.meaning_flagged && w.definition.trim().toLowerCase() !== word.definition.trim().toLowerCase()))) types.push('meaning');
+  if (settings.meaning_enabled && word.definition && !word.meaning_flagged && (word.distractors.length === 3 || state.words.some(w => w.practice_ready!==false && w.definition && !w.meaning_flagged && w.definition.trim().toLowerCase() !== word.definition.trim().toLowerCase()))) types.push('meaning');
   return types;
 }
 function makeMeaningChoices(word) {
   const seen = new Set([word.definition.trim().toLowerCase()]);
   const generated = word.distractors.map((definition,i) => ({id:'distractor:'+i,definition}));
-  const others = generated.length === 3 ? generated : state.words.filter(w => {if (w.meaning_flagged) return false;const key = w.definition.trim().toLowerCase();if (!key || seen.has(key)) return false;seen.add(key);return true;});
+  const others = generated.length === 3 ? generated : state.words.filter(w => {if (w.meaning_flagged || w.practice_ready===false) return false;const key = w.definition.trim().toLowerCase();if (!key || seen.has(key)) return false;seen.add(key);return true;});
   const shuffle = list => {for (let i=list.length-1;i>0;i--) {const j=Math.floor(Math.random()*(i+1));[list[i],list[j]]=[list[j],list[i]];}return list;};
   return shuffle([word,...shuffle(others).slice(0,3)]);
 }
@@ -668,7 +676,7 @@ async function answerSubmit(event) {
   if (meaning && !practice.choice) {toast('Choose a meaning, or press a number key.');return;}
   if (!answer.trim()) {$('#answer').focus();return;}
   answerBusy = true;
-  const session = practice;
+  const session = practice;let playFeedback=false;
   $('#answer-form').setAttribute('aria-busy','true');
   $('#answer').disabled = true;$$('.meaning-choice').forEach(b => b.disabled = true);
   $('#answer-submit').textContent = 'Checking…';
@@ -699,6 +707,7 @@ async function answerSubmit(event) {
     const heading = meaning ? (result.correct ? 'That’s the meaning.' : 'Not quite — here’s the meaning.') : result.correct ? (practice.correction ? 'Spelling corrected!' : 'Correct spelling!') : 'Let’s correct the spelling.';
     const detail = meaning ? `<p>${result.correct ? '' : 'Keep this meaning in mind. '}${escapeHtml(result.expected)}</p>` : result.correct ? `<p>${practice.hinted ? 'Try recalling it unaided next time.' : 'That’s right. A little more familiar.'}</p>${result.tip ? `<p class="feedback-tip">${escapeHtml(result.tip)}</p>` : ''}` : `${letterDiff(result.expected,result.answer)}<p>${escapeHtml(result.tip || 'Notice the highlighted letters, then try again.')}</p>`;
     practiceFeedback(result.correct ? 'correct' : 'incorrect',heading,detail);
+    playFeedback=!!((practice.quizSettings || state.settings).play_after_answer && hasAudio(word,practice.quizSettings || state.settings));
     $('#answer').setAttribute('aria-invalid',String(!result.correct && !meaning));
     if (meaning) $$('.meaning-choice').forEach((button,i) => {
       button.classList.toggle('choice-correct',String(practice.choices[i].id) === String(word.id));
@@ -720,6 +729,7 @@ async function answerSubmit(event) {
     else if (practice.feedback) $('#answer-submit').focus();
     else if (meaning) $('.meaning-choice.selected, .meaning-choice')?.focus();
     else $('#answer').focus();
+    if(playFeedback)guarded(()=>listen(true,true));
   }
 }
 async function advancePractice() {
@@ -820,8 +830,8 @@ function stopPronunciation(release = true) {
   audio.pause();
   if (release) {audio.removeAttribute('src');audio.load();}
 }
-async function listen(automatic = false) {
-  if (!practice || $('#practice-active').hidden || currentWord().audio_flagged) return;
+async function listen(automatic = false, afterAnswer = false) {
+  if (!practice || $('#practice-active').hidden && !afterAnswer || currentWord().audio_flagged) return;
   const sequence = ++audioSequence, audio = $('#pronunciation');
   const url = pronunciationUrl(currentWord());
   audio.pause();
@@ -868,7 +878,7 @@ function renderWordAudio() {
   $('[data-action="find-edit-voice"]').disabled = !!word.audio_file;
   const chosen=word.audio_alternative, credit=$('#audio-source-credit');
   credit.hidden=!chosen?.url;
-  credit.innerHTML=chosen?.url ? `${escapeHtml(chosen.label)} · ${escapeHtml(chosen.author)} · <a href="${escapeHtml(chosen.license_url || chosen.source_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(chosen.license_name)}</a> · <a href="${escapeHtml(chosen.source_url)}" target="_blank" rel="noopener noreferrer">Source page</a><br>This chosen voice takes precedence over the accent setting for this word.` : '';
+  credit.innerHTML=chosen?.url ? `${escapeHtml(chosen.label)}${chosen.selection==='automatic'?' · Automatically selected; check before audio-only exercises':''} · ${escapeHtml(chosen.author)} · <a href="${escapeHtml(chosen.license_url || chosen.source_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(chosen.license_name)}</a> · <a href="${escapeHtml(chosen.source_url)}" target="_blank" rel="noopener noreferrer">Source page</a><br>This chosen voice takes precedence over the accent setting for this word.` : '';
 
 }
 async function changeWordAudio(data) {
@@ -1290,3 +1300,5 @@ $('#review-all-due').addEventListener('change',event=>{
   updateReviewLimit();updateSettingsDirty();
 });
 $('#review-session-size').addEventListener('input',updateReviewLimit);
+
+$('#activate-word').addEventListener('change',event=>{$('#word-submit').textContent=event.target.checked?'Save & add to practice':'Save preparation';});

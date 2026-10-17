@@ -88,10 +88,27 @@
   }
   function edited(check=false) {
     if(!record) return;
-    remember();clearTimeout(saveTimer);status(blocked?'Another tab has a newer saved essay. Download your draft before reloading.':'Unsaved changes · saving shortly…',blocked);
-    if(!blocked) saveTimer=setTimeout(save,600);
+    const changed=dirty();remember();clearTimeout(saveTimer);
+    status(blocked?'Another tab has a newer saved essay. Download your draft before reloading.':changed?'Unsaved changes · saving shortly…':record.updated?'Saved on this computer.':'A fresh page, ready for you.',blocked);
+    if(!blocked && changed) saveTimer=setTimeout(save,600);
     updateCount();if(check) scheduleCheck();
   }
+  let releaseTab=false;
+  q('#essay-body').addEventListener('keydown',event=>{
+    if(event.isComposing || event.ctrlKey || event.metaKey || event.altKey)return;
+    if(event.key==='Escape'){releaseTab=true;return;}
+    if(event.key==='Tab' && releaseTab){releaseTab=false;return;}
+    releaseTab=false;
+    const area=event.currentTarget,change=TypewriterEssayEditing.edit(area.value,area.selectionStart,area.selectionEnd,event.key,event.shiftKey);
+    if(!change)return;event.preventDefault();
+    let start=0,end=area.value.length,nextEnd=change.value.length;
+    while(start<end && start<nextEnd && area.value[start]===change.value[start])start++;
+    while(end>start && nextEnd>start && area.value[end-1]===change.value[nextEnd-1]){end--;nextEnd--;}
+    area.setSelectionRange(start,end);
+    const text=change.value.slice(start,nextEnd);
+    if(!document.execCommand('insertText',false,text)){area.setRangeText(text,start,end,'end');area.dispatchEvent(new Event('input',{bubbles:true}));}
+    area.setSelectionRange(change.start,change.end);sync();
+  });
   q('#essay-body').addEventListener('input',()=>edited(true));
   ['#essay-title','#essay-prompt'].forEach(id=>q(id).addEventListener('input',()=>edited()));
   q('#essay-highlight').addEventListener('change',()=>edited(true));
@@ -109,5 +126,5 @@
   q('#essay-download').addEventListener('click',download);
   window.addEventListener('beforeunload',event=>{if(dirty()){remember();event.preventDefault();event.returnValue='';}});
   document.addEventListener('visibilitychange',()=>{if(document.hidden && dirty() && !blocked) save();});
-  window.TypewriterEssay={open,sync};
+  window.TypewriterEssay={open,sync,recheck:scheduleCheck};
 })();

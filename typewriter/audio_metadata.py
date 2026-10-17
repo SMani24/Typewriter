@@ -59,6 +59,9 @@ def validate_record(data, word):
     elif license_url:
         license_url=allowed_url(license_url,provider,'source')
     result['license_url']=license_url
+    if 'selection' in data:
+        if data['selection'] not in ('manual','automatic'):raise ValueError('Invalid pronunciation selection method.')
+        result['selection']=data['selection']
     if 'approved_at' in data:
         try:
             if datetime.fromisoformat(data['approved_at']).tzinfo is None:raise ValueError()

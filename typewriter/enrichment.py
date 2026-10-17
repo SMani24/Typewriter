@@ -132,8 +132,8 @@ class Enrichment:
             self.state.update(values)
             self.store.job_state(self.state)
 
-    def pending(self, include_errors=True):
-        return [w for w in self.store.list_words() if (w["status"] != "ready" or w["meaning_flagged"] or w["sentence_flagged"]) and (include_errors or not w["enrichment_error"])]
+    def pending(self, include_errors=True, include_manual=False):
+        return [w for w in self.store.list_words() if (include_manual or w["preparation_queue"]!="manual") and (w["status"] != "ready" or w["meaning_flagged"] or w["sentence_flagged"]) and (include_errors or not w["enrichment_error"])]
 
     def snapshot(self):
         with self.lock:
@@ -161,7 +161,7 @@ class Enrichment:
     def start(self, ids=None):
         if self.store.settings()["preparation_method"] != "api":
             raise ValueError("Gemini API preparation is disabled. Use prompt export/import or add material manually.")
-        words = self.pending()
+        words = self.pending(include_manual=ids is not None)
         if ids is not None:
             if not isinstance(ids, list) or any(not isinstance(i, int) for i in ids) or len(ids) > 10000:
                 raise ValueError("Choose a valid set of words.")
@@ -188,7 +188,7 @@ class Enrichment:
             size = self.store.settings()["batch_size"]
             for offset in range(0, len(ids), size):
                 self.require_api_mode()
-                words = [w for w in self.pending() if w["id"] in ids[offset:offset + size]]
+                words = [w for w in self.pending(include_manual=True) if w["id"] in ids[offset:offset + size]]
                 if not words:
                     continue
                 self.update(message=f"Preparing words {offset + 1}–{min(offset + size, len(ids))} of {len(ids)}…")
@@ -204,7 +204,7 @@ class Enrichment:
                 self.update(done=self.state["done"] + completed)
                 self.store.log("info" if completed == len(words) else "warning", f"Saved complete material for {completed} of {len(words)} words in this batch.")
             # A word can be completed manually or deleted while the request runs.
-            remaining = sum(w["id"] in ids for w in self.pending())
+            remaining = sum(w["id"] in ids for w in self.pending(include_manual=True))
             done = len(ids) - remaining
             message = f"Prepared {done} of {len(ids)} words."
             error = f"{remaining} word{'s' if remaining != 1 else ''} still need material: Gemini returned missing or unsuitable fields. Edit them manually or prepare again." if remaining else ""
@@ -227,6 +227,8 @@ class Enrichment:
             # Fixed summaries cannot contain credentials from transport exceptions.
             self.store.log("warning" if failed else "info", f"Preparation {self.state['status']}: {self.state['done']} of {self.state['total']} words ready.")
             self.update(busy=False)
+            callback=getattr(self,"after_prepare",None)
+            if callback:callback()
             if not failed:
                 self.auto_schedule()
 

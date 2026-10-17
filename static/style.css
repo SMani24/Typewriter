@@ -195,3 +195,12 @@ dialog>.toast{position:sticky;bottom:0;left:auto;transform:none;width:auto;max-w
 @media(max-width:600px){.voice-option-actions{flex-wrap:wrap}.voice-option{padding:13px}}
 
 .voice-option-actions .checkbox-label{white-space:nowrap;flex:0 0 auto}
+
+.essay-editor{--essay-scroll-space:clamp(180px,35vh,320px)}
+#essay-body,#essay-highlight-content{padding-bottom:calc(28px + var(--essay-scroll-space));tab-size:4}
+
+.personal-word-list{max-height:280px;overflow:auto;margin:12px 0}.personal-word{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:4px 8px}
+#personal-word-form{display:flex;align-items:end;gap:12px;margin:20px 0}#personal-word-form label{flex:1}
+.essay-word-row{grid-template-columns:minmax(100px,1fr) minmax(140px,2fr) auto!important}.essay-row-actions{display:flex;align-items:center;gap:8px}.essay-word-source strong{overflow-wrap:anywhere}
+#essay-intake-dialog>.checkbox-label{margin:20px 0 4px}#essay-intake-dialog .field-note{margin-bottom:14px}
+@media(max-width:600px){.essay-word-row{grid-template-columns:1fr!important}.essay-row-actions{justify-content:flex-end}#personal-word-form{flex-wrap:wrap}}

@@ -133,6 +133,8 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.locator('#essay-restore').click();
     await page.waitForFunction(()=>document.getElementById('essay-save-status').textContent==='Saved on this computer.');
     assert.equal((await api('/essay')).body,own);
+    await page.locator('#essay-body').fill(own+' extra');await page.locator('#essay-body').fill(own);
+    assert.equal(await page.locator('#essay-save-status').textContent(),'Saved on this computer.');
     for(const width of [1360,390]) for(const size of ['small','default','large','extra-large']) {
       await api('/settings','PUT',{text_size:size});await page.setViewportSize({width,height:1000});
       await page.reload();await page.waitForFunction(()=>!document.getElementById('essay-body').disabled);
@@ -144,6 +146,12 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.locator('#essay-body').evaluate(a=>{a.scrollTop=300;a.dispatchEvent(new Event('scroll'));});
     assert((await page.locator('#essay-highlight-content').getAttribute('style')).includes('-300px'));
     assert.equal(await page.locator('#essay-highlights').evaluate(d=>d.clientWidth),await page.locator('#essay-body').evaluate(d=>d.clientWidth));
+    const scrollRoom=await page.locator('#essay-body').evaluate(area=>{
+      area.scrollTop=area.scrollHeight;area.dispatchEvent(new Event('scroll'));
+      const style=getComputedStyle(area),overlay=getComputedStyle(document.querySelector('#essay-highlight-content'));
+      return {bottom:parseFloat(style.paddingBottom),overlay:overlay.paddingBottom,padding:style.paddingBottom,scroll:area.scrollTop};
+    });
+    assert(scrollRoom.bottom>=200,'Room to scroll below the last essay line');assert(scrollRoom.scroll>300);assert.equal(scrollRoom.padding,scrollRoom.overlay);
     await page.waitForFunction(()=>document.getElementById('essay-save-status').textContent==='Saved on this computer.');
     assert.deepEqual(errors,[]);
     console.log('Essay checks passed: exact local autosave, optional offline underlines, safe text rendering, newer edits during saves, reload recovery, tab conflicts, download, all text sizes, and scrolling highlights.');

@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   const q=selector=>document.querySelector(selector);
-  let rows=[],busy=false,sourceHash='',storageKey=null,loaded=false;
+  let rows=[],busy=false,sourceHash='',storageKey=null,loaded=false,intakeItems=[],discarded=new Set();
   let reply=null,replyText='',replyVersion=0;
   const key=word=>word.toLowerCase().replaceAll('’',"'");
   const normalize=word=>{
@@ -10,82 +10,70 @@
     return value.length<=80 && /^[a-z]+(?:[ '\-][a-z]+)*$/.test(value) ? value : null;
   };
   const existing=()=>new Set((state?.words || []).map(w=>w.word));
-  const selected=()=>rows.filter(row=>row.selected);
-  const ready=()=>rows.filter(row=>row.selected && normalize(row.corrected) && !existing().has(normalize(row.corrected)));
+  const selected=()=>rows.filter(row=>!row.handled);
+  const ready=()=>rows.filter(row=>!row.handled && normalize(row.corrected));
   function message(text,error=false) {q('#essay-words-status').textContent=text;q('#essay-words-status').classList.toggle('error',error);}
-  function remember() {try {if(storageKey) sessionStorage.setItem(storageKey,JSON.stringify({rows,sourceHash}));}catch { /* The open list stays available. */ }}
+  function remember() {try {if(storageKey) localStorage.setItem(storageKey,JSON.stringify({rows,sourceHash,discarded:[...discarded].slice(-1000)}));}catch { /* The open list stays available. */ }}
   async function digest(text) {return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text)))].map(v=>v.toString(16).padStart(2,'0')).join('');}
   async function restore() {
     if(loaded) return;
     const health=await api('/health');storageKey='typewriter-essay-words-'+health.instance;loaded=true;
     try {
-      const saved=JSON.parse(sessionStorage.getItem(storageKey));
-      if(saved && Array.isArray(saved.rows) && saved.rows.length<=500 && saved.rows.every(r=>typeof r.original==='string' && typeof r.corrected==='string' && r.corrected.length<=80 && /^[a-f0-9]{32}$/.test(r.extraction_id) && Number.isInteger(r.id) && Number.isInteger(r.revision) && r.revision>=0 && typeof r.selected==='boolean')) {
-        rows=saved.rows;sourceHash=typeof saved.sourceHash==='string'?saved.sourceHash:'';
+      const saved=JSON.parse(localStorage.getItem(storageKey) || sessionStorage.getItem(storageKey));
+      if(saved && Array.isArray(saved.rows) && saved.rows.length<=500 && saved.rows.every(r=>typeof r.original==='string' && typeof r.corrected==='string' && r.corrected.length<=80 && /^[a-f0-9]{32}$/.test(r.extraction_id) && Number.isInteger(r.id) && Number.isInteger(r.revision) && r.revision>=0)) {
+        rows=saved.rows.map(row=>({...row,handled:!!(row.handled || row.added)}));discarded=new Set(Array.isArray(saved.discarded)?saved.discarded.filter(w=>typeof w==='string').slice(-1000):[]);sourceHash=typeof saved.sourceHash==='string'?saved.sourceHash:'';
       }
     }catch { /* A malformed browser recovery record is ignored. */ }
   }
-  function rowStatus(row) {
-    if(row.corrected && !normalize(row.corrected)) return 'Use an English word or short phrase, up to 80 characters.';
-    if(normalize(row.corrected) && existing().has(normalize(row.corrected))) return row.added ? 'Added to your notebook.' : 'Already in your notebook · kept once.';
-    if(!row.corrected) return row.note || 'Enter the intended spelling, or uncheck a false flag.';
-    const duplicate=rows.some(other=>other!==row && other.selected && normalize(other.corrected)===normalize(row.corrected));
-    return duplicate ? 'Same spelling as another row · it will be added once.' : 'Ready for your check.';
+  function rowStatus(row){
+    if(row.handled)return row.actionStatus || 'Already queued.';
+    if(row.corrected && !normalize(row.corrected))return 'Use an English word or short phrase, up to 80 characters.';
+    if(!row.corrected)return row.note || 'Enter the intended spelling, or discard this flag.';
+    if(existing().has(normalize(row.corrected)))return 'Already in your notebook · confirm to record this essay mistake.';
+    return 'Ready to choose a preparation queue.';
   }
-  function update() {
+  function update(){
     const count=new Set(ready().map(r=>normalize(r.corrected))).size;
-    q('#essay-words-count').textContent=`${rows.length} unique flags · ${selected().length} selected · ${count} new ${count===1?'word':'words'} ready`;
-    q('#essay-words-add').textContent=`Add ${count} ready ${count===1?'word':'words'}`;
-    q('#essay-words-add').disabled=busy || !count;
+    q('#essay-words-count').textContent=`${rows.length} flags kept · ${count} checked ${count===1?'spelling':'spellings'} ready`;
+    q('#essay-words-add').textContent=count?`Queue ${count} ready ${count===1?'word':'words'}`:'No spellings ready';q('#essay-words-add').disabled=busy || !count;
     q('#essay-words-export').disabled=busy || !selected().length;
     q('#essay-words-use').disabled=busy || !reply || replyText!==q('#essay-words-reply').value;
     q('#essay-words-preview').disabled=busy || !q('#essay-words-reply').value.trim();
-    ['#essay-words-extract','#essay-words-all','#essay-words-none','#essay-words-size','#essay-words-context','#essay-words-file'].forEach(id=>q(id).disabled=busy);
+    ['#essay-words-extract','#essay-words-size','#essay-words-context','#essay-words-file'].forEach(id=>q(id).disabled=busy);
     q('#essay-words-list').querySelectorAll('[data-row]').forEach(element=>{
-      const row=rows[Number(element.dataset.row)];
-      element.querySelector('input[type="checkbox"]').disabled=busy;
-      element.querySelector('input[type="text"]').disabled=busy;
+      const row=rows[Number(element.dataset.row)];element.querySelector('input').disabled=busy || row.handled;
       element.querySelector('.essay-word-status').textContent=rowStatus(row);
-      element.querySelector('button').disabled=busy || !normalize(row.corrected) || existing().has(normalize(row.corrected));
+      element.querySelector('[data-add-row]').disabled=busy || row.handled || !normalize(row.corrected);
+      element.querySelector('[data-add-row]').textContent=row.handled?'Saved':existing().has(normalize(row.corrected))?'Review again':'Queue word';
+      element.querySelectorAll('[data-discard-row],[data-accept-row]').forEach(button=>button.disabled=busy);
     });
   }
-  function render() {
-    q('#essay-words-list').innerHTML=rows.length ? rows.map((row,i)=>`<div class="essay-word-row" data-row="${i}"><input type="checkbox" data-choice="${i}" aria-label="Select flag ${escapeHtml(row.original)}" ${row.selected?'checked':''}><div class="essay-word-source"><strong>${escapeHtml(row.original)}</strong><span>${row.count} ${row.count===1?'occurrence':'occurrences'}</span></div><div class="essay-word-correction"><label class="sr-only" for="essay-correction-${i}">Correct spelling for ${escapeHtml(row.original)}</label><input id="essay-correction-${i}" data-correction="${i}" type="text" maxlength="80" autocomplete="off" spellcheck="false" autocorrect="off" placeholder="Intended spelling…" value="${escapeHtml(row.corrected)}"><span class="essay-word-status field-note"></span>${row.note?`<small class="essay-word-reason">${escapeHtml(row.note)}</small>`:''}</div><button class="text-button" data-add-row="${i}">Add word</button></div>`).join('') : '<p class="muted">No flags in this list. Extract the current draft, or import a reply from an earlier prompt.</p>';
+  function render(){
+    q('#essay-words-list').innerHTML=rows.length?rows.map((row,i)=>`<div class="essay-word-row" data-row="${i}"><div class="essay-word-source"><strong>${escapeHtml(row.original)}</strong><span>${row.count} ${row.count===1?'occurrence':'occurrences'}${row.current?'':' · earlier draft'}</span></div><div class="essay-word-correction"><label class="sr-only" for="essay-correction-${i}">Correct spelling for ${escapeHtml(row.original)}</label><input id="essay-correction-${i}" data-correction="${i}" type="text" maxlength="80" autocomplete="off" spellcheck="false" placeholder="Intended spelling…" value="${escapeHtml(row.corrected)}"><span class="essay-word-status field-note"></span>${row.note?`<small class="essay-word-reason">${escapeHtml(row.note)}</small>`:''}</div><div class="essay-row-actions"><button class="text-button" data-add-row="${i}">${existing().has(normalize(row.corrected))?'Review again':'Queue word'}</button><button class="icon-button" data-accept-row="${i}" aria-label="Accept spelling ${escapeHtml(row.original)} in dictionary" title="Add spelling to your personal dictionary">✓</button><button class="icon-button" data-discard-row="${i}" aria-label="Discard flag ${escapeHtml(row.original)}" title="Discard this flag">×</button></div></div>`).join(''):'<p class="muted">No flags in this list. Your next new spelling flags will appear here.</p>';
     update();
   }
-  async function run(action) {
-    if(busy) return;
-    busy=true;update();
-    try {await action();}catch(error){message(error.message || 'Please try again.',true);}
-    finally {busy=false;render();}
+  async function run(action){if(busy)return;busy=true;update();try{await action();}catch(error){message(error.message || 'Please try again.',true);}finally{busy=false;render();}}
+  async function extract(){
+    const text=q('#essay-body').value,result=await api('/essay/words','POST',{text});
+    const found=new Map(result.words.map(row=>[key(row.original),row]));const fresh=[];
+    for(const row of rows){row.current=found.has(key(row.original));if(row.current)row.count=found.get(key(row.original)).count;}
+    for(const item of result.words){if(discarded.has(key(item.original)) || rows.some(row=>key(row.original)===key(item.original)))continue;fresh.push({...item,corrected:'',revision:0,note:'',current:true,handled:false});}
+    const admitted=fresh.slice(0,Math.max(0,500-rows.length));rows=[...admitted,...rows];sourceHash=await digest(text);remember();
+    q('#essay-words-source-note').textContent='New flags appear first. Earlier flags and your corrections stay until you discard them. Your essay is unchanged.';
+    message(admitted.length<fresh.length?'This list has reached 500 flags. Discard completed flags to make room; your earlier words have been kept.':result.limited?'Showing up to 500 unique flags.':admitted.length?`${admitted.length} new flags added above your earlier words.`:'No new flags. Your earlier review list is kept.');
   }
-  async function extract() {
-    const text=q('#essay-body').value;
-    const result=await api('/essay/words','POST',{text});
-    rows=result.words.map(row=>({...row,corrected:'',selected:!row.already_exists,revision:0,note:''}));
-    sourceHash=await digest(text);remember();
-    q('#essay-words-source-note').textContent='List from your current draft. False flags can be unchecked. Your writing stays unchanged.';
-    message(result.limited?'Showing the first 500 unique flags. Repeated occurrences are grouped.':rows.length?'Check the intended spellings one by one, or export the selected flags for LLM review.':'No spelling flags found. You can still import a reply from an earlier prompt.');
+  async function open(){await restore();q('#essay-words-size').value=state.settings.offline_batch_size || 20;q('#essay-words-dialog').showModal();render();await run(extract);}
+  function add(items){
+    intakeItems=items.filter(row=>!row.handled && normalize(row.corrected));if(!intakeItems.length)throw new Error('Check at least one intended spelling first.');
+    q('#essay-intake-count').textContent=`${new Set(intakeItems.map(row=>normalize(row.corrected))).size} words. They will be saved outside practice until prepared; existing words will be marked for review.`;
+    q('#essay-intake-dialog').showModal();
   }
-  async function open() {
-    await restore();
-    q('#essay-words-size').value=state.settings.offline_batch_size || 20;
-    q('#essay-words-dialog').showModal();render();
-    if(!rows.length) await run(extract);
-    else {
-      const current=await digest(q('#essay-body').value);
-      q('#essay-words-source-note').textContent=sourceHash===current?'Your saved review list. Your writing stays unchanged.':'This list is from an earlier draft or prompt. Finish reviewing it, or replace it with flags from the current draft.';
-    }
-  }
-  async function add(items) {
-    const words=[...new Set(items.map(row=>normalize(row.corrected)).filter(Boolean))];
-    if(!words.length) throw new Error('Enter at least one intended spelling first.');
-    const result=await api('/words','POST',{words:words.map(word=>({word,tag:'Essay spelling'}))});
-    // Only the deliberate Add action writes notebook words; no LLM result can do so.
-    for(const row of rows) if(words.includes(normalize(row.corrected))) {row.selected=false;row.added=true;row.revision++;}
-    remember();await refresh();
-    if(result.added.length) guarded(()=>checkAddedPronunciations(result.added));
-    message(`${result.added.length} new ${result.added.length===1?'word':'words'} added${result.duplicates.length?` · ${result.duplicates.length} already in the notebook`:''}. Missing meanings and examples use your usual preparation settings.`);
+  async function confirmIntake(){
+    const choice=q('input[name="essay-intake-mode"]:checked').value;
+    const mode=choice==='llm' && q('#essay-intake-auto-voice').checked?'llm_auto':choice;
+    const result=await api('/essay/words/intake','POST',{mode,words:intakeItems.map(row=>({extraction_id:row.extraction_id,id:row.id,word:normalize(row.corrected)}))});
+    for(const row of intakeItems){row.handled=true;row.revision++;row.actionStatus=existing().has(normalize(row.corrected))?'Essay mistake recorded · available for review.':mode==='manual'?'In the manual preparation queue.':'In the LLM preparation queue.';}
+    q('#essay-intake-dialog').close();intakeItems=[];remember();await refresh();message(`${result.added.length} words queued · ${result.marked.length} words marked for another review. Review scores were kept.`);render();
   }
   async function exportPrompts() {
     const size=Number(q('#essay-words-size').value);
@@ -113,11 +101,13 @@
     for(const entry of reply.words) {
       let row=rows.find(r=>key(r.original)===key(entry.original));
       if(row && (row.extraction_id===entry.extraction_id ? row.revision!==entry.snapshot_revision : row.edited)) {kept++;continue;}
+      if(discarded.has(key(entry.original))) {kept++;continue;}
+      if(entry.action==='skip'){rows=rows.filter(r=>key(r.original)!==key(entry.original));discarded.add(key(entry.original));used++;continue;}
       if(!row) {
         if(rows.length>=500) {kept++;continue;}
         row={};rows.push(row);
       }
-      Object.assign(row,{id:entry.id,extraction_id:entry.extraction_id,original:entry.original,count:entry.count,context:entry.context,corrected:entry.word,selected:entry.action==='add' && !entry.already_exists,note:entry.reason,revision:entry.snapshot_revision,edited:false});
+      Object.assign(row,{id:entry.id,extraction_id:entry.extraction_id,original:entry.original,count:entry.count,context:entry.context,corrected:entry.word,handled:false,current:false,note:entry.reason,revision:entry.snapshot_revision,edited:false});
       used++;
     }
     sourceHash='';q('#essay-words-source-note').textContent='This review list includes suggestions from saved prompts. Check them before adding words; your draft is unchanged.';
@@ -131,34 +121,28 @@
   q('#essay-words-preview').addEventListener('click',()=>run(previewReply));
   q('#essay-words-use').addEventListener('click',useSuggestions);
   q('#essay-words-reply').addEventListener('input',invalidateReply);
-  for(const [id,value] of [['#essay-words-all',true],['#essay-words-none',false]]) q(id).addEventListener('click',()=>{rows.forEach(r=>{r.selected=value;r.revision++;});remember();render();});
+  q('#essay-intake-confirm').addEventListener('click',()=>guarded(confirmIntake,q('#essay-intake-confirm')));
   q('#essay-words-list').addEventListener('input',event=>{
-    if(event.target.dataset.correction===undefined) return;
-    const row=rows[Number(event.target.dataset.correction)];row.corrected=event.target.value;row.selected=true;row.edited=true;row.added=false;row.revision++;
-    event.target.closest('[data-row]').querySelector('input[type="checkbox"]').checked=true;remember();update();
+    if(event.target.dataset.correction===undefined)return;
+    const row=rows[Number(event.target.dataset.correction)];row.corrected=event.target.value;row.edited=true;row.revision++;remember();update();
   });
-  q('#essay-words-list').addEventListener('change',event=>{
-    if(event.target.dataset.choice===undefined) return;
-    const row=rows[Number(event.target.dataset.choice)];row.selected=event.target.checked;row.revision++;remember();update();
-  });
-  q('#essay-words-list').addEventListener('keydown',async event=>{
-    if(event.key!=='Enter' || event.isComposing || event.target.dataset.correction===undefined || busy) return;
-    event.preventDefault();
-    const index=Number(event.target.dataset.correction),row=rows[index];
-    if(!normalize(row.corrected) || existing().has(normalize(row.corrected))) return;
-    await run(()=>add([row]));
-    if(existing().has(normalize(row.corrected))) q(`#essay-correction-${index+1}`)?.focus();
+  q('#essay-words-list').addEventListener('keydown',event=>{
+    if(event.key!=='Enter' || event.isComposing || event.target.dataset.correction===undefined || busy)return;
+    event.preventDefault();const row=rows[Number(event.target.dataset.correction)];if(normalize(row.corrected) && !row.handled)add([row]);
   });
   q('#essay-words-list').addEventListener('click',event=>{
-    const button=event.target.closest('[data-add-row]');if(button) run(()=>add([rows[Number(button.dataset.addRow)]]));
+    const addButton=event.target.closest('[data-add-row]');if(addButton){add([rows[Number(addButton.dataset.addRow)]]);return;}
+    const discard=event.target.closest('[data-discard-row]');if(discard){const index=Number(discard.dataset.discardRow);discarded.add(key(rows[index].original));rows.splice(index,1);remember();render();return;}
+    const accept=event.target.closest('[data-accept-row]');if(accept)guarded(()=>TypewriterDictionary.open(rows[Number(accept.dataset.acceptRow)].original));
   });
+  document.addEventListener('typewriter-dictionary-changed',()=>guarded(async()=>{const accepted=new Set((await api('/essay/dictionary')).words);rows=rows.filter(row=>!accepted.has(key(row.original)));remember();if(q('#essay-words-dialog').open)await run(extract);}));
   q('#essay-words-file').addEventListener('change',()=>run(async()=>{
     const file=q('#essay-words-file').files[0];if(!file) return;
     if(file.size>2*1024*1024) throw new Error('Choose a reply smaller than 2 MB.');
     q('#essay-words-reply').value=await file.text();invalidateReply();await previewReply();
   }));
   q('#essay-words-copy').addEventListener('click',()=>run(async()=>{
-    const text=selected().map(r=>r.original).join('\n');if(!text) throw new Error('Select flags to download first.');
-    download(new Blob([text+'\n'],{type:'text/plain;charset=utf-8'}),'typewriter-essay-flags.txt');message('Selected original flags downloaded. Check them before adding practice words.');
+    const text=selected().map(r=>r.original).join('\n');if(!text) throw new Error('There are no remaining flags to download.');
+    download(new Blob([text+'\n'],{type:'text/plain;charset=utf-8'}),'typewriter-essay-flags.txt');message('Remaining original flags downloaded. Check them before adding practice words.');
   }));
 })();

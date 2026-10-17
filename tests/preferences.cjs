@@ -116,6 +116,16 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
         await end();
       }
     }
+    // After-answer playback is independent of task-opening autoplay.
+    await api('/settings','PUT',{play_after_answer:true});
+    for(const task of ['sentence','meaning']){
+      await configure(task,false);await review('necessary');assert.equal(await calls(),0);
+      if(task==='meaning')await page.locator('.meaning-choice').first().click();
+      else{await page.locator('#answer').fill('necessary');await page.keyboard.press('Enter');}
+      await page.waitForFunction(()=>window.audioCalls===1 && document.querySelector('#pronunciation').currentTime>0);
+      await end();
+    }
+    await api('/settings','PUT',{play_after_answer:false});
     // Flags exclude even previously verified recordings from automatic playback.
     const id=(await api('/state')).words.find(w=>w.word==='necessary').id;
     await api('/words/'+id+'/audio','PATCH',{flagged:true});
@@ -127,11 +137,11 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await api('/words/'+id+'/audio','PATCH',{verified:true});
     // Existing notebooks have unchecked Cambridge URLs. Their clue-task autoplay
     // must work without silently admitting them into audio-only exercises.
-    const clip=await (await page.request.get(base+`/api/words/${id}/audio?preview=1`)).body();
+    const clipResponse=await page.request.get(base+`/api/words/${id}/audio?preview=1`);const clip=await clipResponse.body();const clipType=clipResponse.headers()['content-type'];
     await api('/words/'+id+'/audio','DELETE');
     await api('/words/'+id,'PATCH',{source:'Cambridge',audio_url:'https://dictionary.cambridge.org/necessary.mp3',audio_urls:{uk:'https://dictionary.cambridge.org/necessary.mp3'}});
     const recordingRoute=`**/api/words/${id}/audio?*`;
-    await page.route(recordingRoute,route=>route.fulfill({body:clip,contentType:'audio/wav'}));
+    await page.route(recordingRoute,route=>route.fulfill({body:clip,contentType:clipType}));
     await configure('sentence',true);await review('necessary');
     assert.equal(await calls(),1);await page.waitForFunction(()=>document.querySelector('#pronunciation').currentTime>0);
     assert.equal((await api('/state')).words.find(w=>w.id===id).audio_eligible,false);

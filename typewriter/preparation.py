@@ -43,7 +43,7 @@ class Preparation:
             raise ValueError("Choose between 1 and 100 words per file.")
         if ids is not None and (not isinstance(ids, list) or len(ids) > 10000 or any(type(i) is not int for i in ids)):
             raise ValueError("Choose a valid set of words.")
-        words = [{**w, "re_evaluate": re_evaluate} for w in self.store.list_words() if (re_evaluate or w["status"] != "ready" or w["meaning_flagged"] or w["sentence_flagged"]) and (ids is None or w["id"] in ids)]
+        words = [{**w, "re_evaluate": re_evaluate} for w in self.store.list_words() if (re_evaluate or w["status"] != "ready" or w["meaning_flagged"] or w["sentence_flagged"]) and (ids is None or w["id"] in ids) and (w["preparation_queue"]!="manual" or ids is not None)]
         if not words:
             raise ValueError("There are no words waiting for preparation in this set.")
         bundle = uuid.uuid4().hex[:12]

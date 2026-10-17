@@ -54,6 +54,7 @@ def audio_eligible(word, settings):
 
 
 def spelling_types(word, settings):
+    if word.get("practice_ready") is False:return []
     return [name for name, ready in (
         ('sentence', bool(word['clue'])),
         ('definition', bool(word['definition'] and not word['meaning_flagged'])),
@@ -162,6 +163,7 @@ class SchedulingStore:
             selected = engine(db)
             # list_words uses the same committed revision; this transaction excludes writers.
             candidates = [w for w in self.list_words() if scope is None or w['id'] in scope]
+            if kind=='drill' and any(not w.get('practice_ready',True) for w in candidates):raise ValueError('Finish preparing this word before starting a drill.')
             spellable = [w for w in candidates if spelling_types(w,settings)]
             due = [w for w in spellable if w['is_due']]
             pool = (due or spellable) if kind=='endless' else spellable if kind=='selected' else due

@@ -1,4 +1,5 @@
 """Review advisory essay flags locally or exchange a bounded prompt with any LLM."""
+import hashlib
 import io
 import json
 import re
@@ -6,7 +7,7 @@ import uuid
 import zipfile
 from datetime import datetime, timezone
 
-from .spelling import TOKEN, vocabulary
+from .spelling import TOKEN, vocabulary, dictionary_fingerprint
 from .store import clean_word
 
 FORMAT = 'typewriter-essay-words'
@@ -23,13 +24,20 @@ class EssayWords:
     def extract(self, text):
         if not isinstance(text,str) or len(text)>100000:
             raise ValueError('Review an essay up to 100,000 characters long.')
-        known=vocabulary()
+        known=vocabulary();personal=set(self.store.personal_dictionary())
+        text_hash=hashlib.sha256(text.encode('utf-8',errors='surrogatepass')).hexdigest()
+        revision=hashlib.sha256((dictionary_fingerprint()+'\0'+'\0'.join(sorted(personal))).encode()).hexdigest()[:16]
+        source_name='essay-source:'+text_hash+':'+revision
+        with self.store.db() as db:
+            cached=db.execute('SELECT value FROM cache WHERE name=?',(source_name,)).fetchone()
+            saved=db.execute('SELECT value FROM cache WHERE name=?',('essay-words:'+cached['value'],)).fetchone() if cached else None
+        if saved:return self.decorate(json.loads(saved['value']))
         entries={}
         limited=False
         for match in TOKEN.finditer(text):
             original=match.group()
             key=source_key(original)
-            if key in known or key.endswith("'s") and key[:-2] in known:
+            if key in personal or key in known or key.endswith("'s") and key[:-2] in known:
                 continue
             if key in entries:
                 entries[key]['count']+=1
@@ -40,10 +48,11 @@ class EssayWords:
             context=' '.join(text[max(0,match.start()-70):min(len(text),match.end()+70)].split())
             entries[key]={'id':len(entries)+1,'original':original,'count':1,'context':context}
         extraction_id=uuid.uuid4().hex
-        result={'extraction_id':extraction_id,'words':list(entries.values()),'limited':limited}
+        result={'extraction_id':extraction_id,'words':list(entries.values()),'limited':limited,'text_hash':text_hash}
         # Only flagged tokens and bounded excerpts are retained, never the entire draft.
         with self.store.db() as db:
             db.execute('INSERT INTO cache VALUES (?,?)',('essay-words:'+extraction_id,json.dumps(result)))
+            db.execute('INSERT OR REPLACE INTO cache VALUES (?,?)',(source_name,extraction_id))
         return self.decorate(result)
 
     def decorate(self, result):

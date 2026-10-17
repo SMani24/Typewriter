@@ -7,7 +7,9 @@ import unicodedata
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from .audio_processing import VERSION as AUDIO_PROCESSING_VERSION
 from .audio_metadata import selected_audio as chosen_audio, save_selected, validate_record
+from .spelling import normalize_personal_word
 from .models import normalize_model
 from .scheduling import SchedulingStore, card_for, save_card, engine, adapter, utc, Rating, CONFIG_ID
 
@@ -23,7 +25,7 @@ DEFAULTS = {
     "review_session_size": 0, "audio_volume": 100, "text_size": "default",
     "pronunciation_accent": "uk", "scheduler": "legacy",
     "autoplay_sentence": False, "autoplay_definition": False, "autoplay_audio": True,
-    "autoplay_meaning": False, "autoplay_drill": False, "autoplay_correction": False,
+    "play_after_answer": False, "autoplay_meaning": False, "autoplay_drill": False, "autoplay_correction": False,
 }
 
 
@@ -74,13 +76,13 @@ class Store(SchedulingStore):
         if self.path.exists():
             with sqlite3.connect(self.path) as source:
                 schema = source.execute("PRAGMA user_version").fetchone()[0]
-                if schema>2:
+                if schema>3:
                     raise ValueError("This notebook needs a newer Typewriter version.")
                 needs_clue_flag=not source.execute("SELECT 1 FROM pragma_table_info('words') WHERE name='sentence_flagged'").fetchone()
-                if schema<2 or needs_clue_flag:
+                if schema<3 or needs_clue_flag:
                     backups=self.path.parent/"backups"
                     backups.mkdir(exist_ok=True)
-                    destination=backups/(("before-scheduler-v2-" if schema<2 else "before-clue-flags-")+datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")+".db")
+                    destination=backups/(("before-scheduler-v2-" if schema<2 else "before-clue-flags-" if needs_clue_flag else "before-essay-intake-")+datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")+".db")
                     with sqlite3.connect(destination) as backup:
                         source.backup(backup)
                     destination.chmod(0o600)
@@ -109,6 +111,8 @@ class Store(SchedulingStore):
                     PRIMARY KEY (key_id, day)
                 );
                 CREATE TABLE IF NOT EXISTS cache (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS spelling_words (word TEXT PRIMARY KEY, created TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS essay_slips (event_key TEXT PRIMARY KEY, word_id INTEGER NOT NULL REFERENCES words(id) ON DELETE CASCADE, created TEXT NOT NULL, count INTEGER NOT NULL);
                 CREATE TABLE IF NOT EXISTS app_log (
                     id INTEGER PRIMARY KEY, created TEXT NOT NULL,
                     level TEXT NOT NULL, message TEXT NOT NULL
@@ -121,7 +125,7 @@ class Store(SchedulingStore):
                 );
             """)
             columns = {r["name"] for r in db.execute("PRAGMA table_info(words)")}
-            for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''", "meaning_flagged": "INTEGER NOT NULL DEFAULT 0", "sentence_flagged": "INTEGER NOT NULL DEFAULT 0", "distractors": "TEXT NOT NULL DEFAULT '[]'", "audio_urls": "TEXT NOT NULL DEFAULT '{}'", "pronunciation_accent": "TEXT NOT NULL DEFAULT ''", "recall_reset_at": "TEXT NOT NULL DEFAULT ''", "drill_completed_at": "TEXT NOT NULL DEFAULT ''"}.items():
+            for name, definition in {"audio_flagged": "INTEGER NOT NULL DEFAULT 0", "audio_verified": "INTEGER NOT NULL DEFAULT 0", "audio_file": "TEXT NOT NULL DEFAULT ''", "meaning_flagged": "INTEGER NOT NULL DEFAULT 0", "sentence_flagged": "INTEGER NOT NULL DEFAULT 0", "preparation_queue": "TEXT NOT NULL DEFAULT ''", "essay_mistakes": "INTEGER NOT NULL DEFAULT 0", "essay_mistake_at": "TEXT NOT NULL DEFAULT ''", "distractors": "TEXT NOT NULL DEFAULT '[]'", "audio_urls": "TEXT NOT NULL DEFAULT '{}'", "pronunciation_accent": "TEXT NOT NULL DEFAULT ''", "recall_reset_at": "TEXT NOT NULL DEFAULT ''", "drill_completed_at": "TEXT NOT NULL DEFAULT ''"}.items():
                 if name not in columns:
                     db.execute(f"ALTER TABLE words ADD COLUMN {name} {definition}")
             columns = {r["name"] for r in db.execute("PRAGMA table_info(attempts)")}
@@ -145,7 +149,7 @@ class Store(SchedulingStore):
                     db.execute("UPDATE settings SET value='0' WHERE name='review_session_size'")
                 db.execute("INSERT INTO cache VALUES ('review-size-default-v2','1')")
             self.init_scheduling(db)
-            db.execute("PRAGMA user_version=2")
+            db.execute("PRAGMA user_version=3")
 
     @contextmanager
     def db(self):
@@ -175,7 +179,7 @@ class Store(SchedulingStore):
                 if key == "proxy_password" and data[key] == "" and not data.get("clear_proxy_password"):
                     continue
                 values[key] = data[key]
-        for key in ["proxy_enabled", "auto_ai", "review_enabled", "drill_enabled", "sentence_enabled", "definition_enabled", "audio_enabled", "meaning_enabled", "autoplay_sentence", "autoplay_definition", "autoplay_audio", "autoplay_meaning", "autoplay_drill", "autoplay_correction"]:
+        for key in ["proxy_enabled", "auto_ai", "review_enabled", "drill_enabled", "sentence_enabled", "definition_enabled", "audio_enabled", "meaning_enabled", "autoplay_sentence", "autoplay_definition", "autoplay_audio", "autoplay_meaning", "autoplay_drill", "autoplay_correction", "play_after_answer"]:
             if not isinstance(values[key], bool):
                 raise ValueError("Choose an on/off setting.")
         if not values["review_enabled"] and not values["drill_enabled"]:
@@ -254,6 +258,7 @@ class Store(SchedulingStore):
             latest_reviews = {r["word_id"]:dict(r) for r in db.execute("""SELECT a.word_id,a.correct,a.hinted FROM attempts a
                 JOIN words w ON w.id=a.word_id WHERE a.mode='review' AND a.created>w.recall_reset_at
                 AND a.id=(SELECT MAX(b.id) FROM attempts b WHERE b.word_id=a.word_id AND b.mode='review' AND b.created>w.recall_reset_at)""")}
+            last_success={r[0]:r[1] for r in db.execute("SELECT word_id,MAX(created) FROM attempts WHERE mode='review' AND correct=1 AND hinted=0 GROUP BY word_id")}
             results = {(r["word_id"], r["mode"], r["hinted"]): dict(r) for r in recent}
             timestamp = datetime.now(timezone.utc)
             selected = engine(db)
@@ -265,7 +270,7 @@ class Store(SchedulingStore):
                 w["distractors"] = json.loads(w["distractors"])
                 w["audio_urls"] = json.loads(w["audio_urls"])
                 w["audio_alternative"] = chosen_audio(db,w)
-                w["audio_revision"] = hashlib.sha256(json.dumps([w["audio_file"],w["audio_urls"],w["audio_url"],w["audio_flagged"],w["audio_alternative"]],sort_keys=True).encode()).hexdigest()[:16]
+                w["audio_revision"] = hashlib.sha256(json.dumps([AUDIO_PROCESSING_VERSION,w["audio_file"],w["audio_urls"],w["audio_url"],w["audio_flagged"],w["audio_alternative"]],sort_keys=True).encode()).hexdigest()[:16]
                 selected_accent = w["pronunciation_accent"] or accent
                 selected_audio = w["audio_urls"].get(selected_accent) if w["audio_urls"] else w["audio_url"] if selected_accent == "uk" else ""
                 w["audio_eligible"] = bool(w["audio_verified"] and not w["audio_flagged"] and (w["audio_file"] or w["audio_alternative"] or selected_audio))
@@ -279,7 +284,11 @@ class Store(SchedulingStore):
                 w["fsrs_state"] = card.state.name
                 if selected == "fsrs":
                     w["due"] = w["fsrs_due"]
-                w["is_due"] = utc(w["due"]) <= timestamp
+                w["practice_ready"] = not w["preparation_queue"]
+                success=last_success.get(w["id"])
+                w["essay_pending"] = bool(w["essay_mistake_at"] and (not success or utc(w["essay_mistake_at"])>utc(success)))
+                if w["essay_pending"]:w["due"]=min(w["due"],w["essay_mistake_at"],key=utc)
+                w["is_due"] = w["practice_ready"] and utc(w["due"]) <= timestamp
                 w["state"] = "New" if not w["reviews"] else ("Confident" if w["stage"] >= 3 else "Learning")
                 if selected == "fsrs":
                     w["state"] = "New" if card.last_review is None else "Learning" if card.state.name != "Review" else "Reviewing"
@@ -287,10 +296,10 @@ class Store(SchedulingStore):
                 meanings = results.get((w["id"], "meaning", 0), {})
                 w["recent_reviews"] = recall.get("total", 0)
                 w["recent_accuracy"] = round(100 * recall["correct"] / recall["total"]) if recall else None
-                w["needs_help"] = bool(latest_reviews.get(w["id"]) and (latest_reviews[w["id"]]["hinted"] or not latest_reviews[w["id"]]["correct"]))
+                w["needs_help"] = w["essay_pending"] or bool(latest_reviews.get(w["id"]) and (latest_reviews[w["id"]]["hinted"] or not latest_reviews[w["id"]]["correct"]))
                 w["recent_mistakes"] = recall.get("total", 0) - recall.get("correct", 0)
                 w["recall_streak"] = recall["first_miss"] - 1 if recall.get("first_miss") else recall.get("total", 0)
-                w["drill_recommended"] = w["recent_mistakes"] >= 2 and (w["recall_streak"] < 3 or w["needs_help"])
+                w["drill_recommended"] = (w["recent_mistakes"] >= 2 or w["essay_pending"] and w["essay_mistakes"]>=2) and (w["recall_streak"] < 3 or w["needs_help"])
                 overdue = max(0, (timestamp - datetime.fromisoformat(w["due"])).total_seconds() / 86400)
                 evidence = spaced_recent.get(w["id"],{})
                 w["spaced_recent_reviews"] = evidence.get("total",0)
@@ -366,6 +375,9 @@ class Store(SchedulingStore):
         if not isinstance(audio, str) or audio and not re.fullmatch(r"https://dictionary\.cambridge\.org/[^\s]+", audio):
             raise ValueError("Unsupported pronunciation URL.")
         status = "ready" if all(item[k] for k in ["definition", "sentence", "tip"]) else "pending"
+        usable_audio=original["audio_eligible"] and not renamed and (original["audio_file"] or original["audio_alternative"] or audio==original["audio_url"] and audio_urls==original["audio_urls"])
+        if data.get("activate") is True and not (item["definition"] and (not original["meaning_flagged"] or item["definition"]!=original["definition"]) or item["sentence"] and (not original["sentence_flagged"] or item["sentence"]!=original["sentence"]) or usable_audio):
+            raise ValueError("Add a usable sentence, meaning, or checked recording before moving this word into practice.")
         with self.db() as db:
             if renamed and db.execute("SELECT id FROM words WHERE word=? AND id!=?", (item["word"],word_id)).fetchone():
                 raise ValueError("That spelling is already in your notebook. Choose a different word.")
@@ -385,9 +397,18 @@ class Store(SchedulingStore):
                 reset=db.execute("SELECT * FROM words WHERE id=?",(word_id,)).fetchone()
                 cursor=db.execute("SELECT COALESCE(MAX(id),0) FROM attempts WHERE word_id=?",(word_id,)).fetchone()[0]
                 save_card(db,card_for(db,reset),cursor)
+            if data.get("activate") is True:db.execute("UPDATE words SET preparation_queue='' WHERE id=?",(word_id,))
         if (audio != original["audio_url"] or audio_urls != original["audio_urls"]) and not (original["audio_file"] or original["audio_alternative"]):
             with self.db() as db:
                 db.execute("UPDATE words SET audio_verified=0 WHERE id=?", (word_id,))
+        return self.word(word_id)
+
+    def activate_word(self,word_id):
+        word=self.word(word_id)
+        if not word:raise KeyError("Word not found.")
+        if not (word["clue"] or word["definition"] and not word["meaning_flagged"] or word["audio_eligible"]):
+            raise ValueError("Add a usable sentence, meaning, or checked recording before moving this word into practice.")
+        with self.db() as db:db.execute("UPDATE words SET preparation_queue='' WHERE id=?",(word_id,))
         return self.word(word_id)
 
     def set_pronunciation(self, word_id, accent, urls=None):
@@ -493,6 +514,9 @@ class Store(SchedulingStore):
             except ValueError:
                 pass
         status = "ready" if all(item[k] for k in ["definition", "sentence", "tip"]) else "pending"
+        queue=item["preparation_queue"]
+        if status=="ready" and queue=="llm" and not item["meaning_flagged"] and not item["sentence_flagged"]:queue=""
+        db.execute("UPDATE words SET preparation_queue=? WHERE id=?",(queue,item["id"]))
         changed = any(item[k] != row[k] for k in ("definition", "sentence", "tip", "distractors", "meaning_flagged", "sentence_flagged"))
         db.execute("UPDATE words SET definition=?,sentence=?,tip=?,distractors=?,meaning_flagged=?,sentence_flagged=?,sources=?,updated=?,status=?,enrichment_error='',version=version+? WHERE id=?", (item["definition"], item["sentence"], item["tip"], item["distractors"], item["meaning_flagged"], item["sentence_flagged"], json.dumps(sources), now(), status, int(changed), item["id"]))
         return status == "ready" and not item["meaning_flagged"] and not item["sentence_flagged"]
@@ -528,6 +552,7 @@ class Store(SchedulingStore):
             row = db.execute("SELECT * FROM words WHERE id=?", (word_id,)).fetchone()
             if not row:
                 raise KeyError("Word not found.")
+            if row["preparation_queue"]:raise ValueError("Finish preparing this word before practising it.")
             if "version" in data and data["version"] != row["version"]:
                 raise ValueError("This word changed during practice. Edit it or start a new session.")
             if mode == "meaning":
@@ -540,7 +565,7 @@ class Store(SchedulingStore):
                         chosen = int(answer)
                     except ValueError:
                         raise ValueError("Choose a meaning first.") from None
-                    choice = db.execute("SELECT definition FROM words WHERE id=? AND meaning_flagged=0", (chosen,)).fetchone()
+                    choice = db.execute("SELECT definition FROM words WHERE id=? AND meaning_flagged=0 AND preparation_queue=''", (chosen,)).fetchone()
                 if not choice or not row["definition"] or row["meaning_flagged"]:
                     raise ValueError("This meaning is no longer available. Start a new session.")
                 correct = choice["definition"].strip().lower() == row["definition"].strip().lower()
@@ -643,6 +668,19 @@ class Store(SchedulingStore):
             spaced = dict(db.execute("SELECT COUNT(*) AS spaced_reviews,COALESCE(SUM(correct),0) AS spaced_correct,MIN(created) AS spaced_since FROM attempts WHERE spaced_recall=1").fetchone())
         return {"history": history, "mistakes": mistakes, **totals, **spaced}
 
+    def personal_dictionary(self):
+        with self.db() as db:return [r[0] for r in db.execute("SELECT word FROM spelling_words ORDER BY word")]
+
+    def set_personal_word(self,word,remove=False):
+        word=normalize_personal_word(word)
+        with self.db() as db:
+            if remove:db.execute("DELETE FROM spelling_words WHERE word=?",(word,))
+            else:
+                if db.execute("SELECT COUNT(*) FROM spelling_words").fetchone()[0]>=10000 and not db.execute("SELECT 1 FROM spelling_words WHERE word=?",(word,)).fetchone():
+                    raise ValueError("Your personal dictionary is full (10,000 words). Remove a word first.")
+                db.execute("INSERT OR IGNORE INTO spelling_words VALUES (?,?)",(word,now()))
+        return {"word":word,"words":self.personal_dictionary()}
+
     def essay(self):
         with self.db() as db:
             row = db.execute("SELECT title,prompt,body,highlight,updated,version FROM essay WHERE id=1").fetchone()
@@ -682,21 +720,26 @@ class Store(SchedulingStore):
             words = [dict(r) for r in db.execute("SELECT * FROM words")]
             attempts = [dict(r) for r in db.execute("SELECT * FROM attempts")]
             scheduling = self.export_scheduling(db,words)
+            essay_slips=[dict(r) for r in db.execute("SELECT * FROM essay_slips")]
             for word in words:
                 alternative=chosen_audio(db,word)
                 if alternative:word["audio_alternative"]=alternative
         for word in words:
             word["distractors"] = json.loads(word["distractors"])
             word["audio_urls"] = json.loads(word["audio_urls"])
-        return {"format": "typewriter", "version": 2, "attempt_metadata_version":2, "audio_metadata_version":1, "scheduling":scheduling, "exported": now(), "words": words, "attempts": attempts, "essay": self.essay()}
+        return {"format": "typewriter", "version": 3, "attempt_metadata_version":2, "audio_metadata_version":1, "scheduling":scheduling, "exported": now(), "words": words, "attempts": attempts, "essay": self.essay(), "personal_dictionary":self.personal_dictionary(), "essay_slips":essay_slips}
 
     def import_backup(self, data):
-        if not isinstance(data, dict) or data.get("format") != "typewriter" or data.get("version") not in (1,2):
+        if not isinstance(data, dict) or data.get("format") != "typewriter" or data.get("version") not in (1,2,3):
             raise ValueError("Choose a Typewriter backup file.")
         if data.get("attempt_metadata_version",1) not in (1,2):
             raise ValueError("This backup uses a newer practice-context format. Update Typewriter before importing it.")
         if data.get("audio_metadata_version",1) != 1:
             raise ValueError("This backup uses newer pronunciation metadata. Update Typewriter before importing it.")
+        personal=data.get("personal_dictionary",[])
+        if not isinstance(personal,list) or len(personal)>10000:
+            raise ValueError("Invalid personal dictionary in backup.")
+        personal={normalize_personal_word(w) for w in personal}
         words, attempts = data.get("words"), data.get("attempts")
         essay = self.validate_essay(data["essay"]) if "essay" in data else None
         if not isinstance(words, list) or not isinstance(attempts, list) or len(words) > 10000 or len(attempts) > 100000:
@@ -743,7 +786,9 @@ class Store(SchedulingStore):
                     raise ValueError("Missing pronunciation approval in backup.")
             if w.get("pronunciation_accent", "") not in ("", "uk", "us"):
                 raise ValueError("Invalid pronunciation choice in backup.")
-            for field in ("recall_reset_at", "drill_completed_at"):
+            if w.get("preparation_queue","") not in ("","manual","llm","llm_auto") or type(w.get("essay_mistakes",0)) is not int or not 0<=w.get("essay_mistakes",0)<=100000000:
+                raise ValueError("Invalid essay preparation state in backup.")
+            for field in ("recall_reset_at", "drill_completed_at", "essay_mistake_at"):
                 stamp = w.get(field, "")
                 try:
                     if not isinstance(stamp, str) or stamp and datetime.fromisoformat(stamp).tzinfo is None:
@@ -753,6 +798,14 @@ class Store(SchedulingStore):
                 except (ValueError, TypeError):
                     raise ValueError("Invalid practice date in backup.") from None
             validated.append((w, item))
+        slips=data.get("essay_slips",[])
+        if not isinstance(slips,list) or len(slips)>100000:raise ValueError("Invalid essay evidence in backup.")
+        for event in slips:
+            if not isinstance(event,dict) or not isinstance(event.get("event_key"),str) or not re.fullmatch("[a-f0-9]{64}",event["event_key"]) or event.get("word_id") not in ids or type(event.get("count")) is not int or not 1<=event["count"]<=100000:
+                raise ValueError("Invalid essay evidence in backup.")
+            try:
+                if datetime.fromisoformat(event["created"]).tzinfo is None:raise ValueError()
+            except (ValueError,KeyError,TypeError):raise ValueError("Invalid essay evidence date.") from None
         normalized_attempts = []
         for a in attempts:
             if not isinstance(a, dict) or a.get("word_id") not in ids or a.get("mode") not in ["review", "drill", "correction", "meaning"] or a.get("correct") not in [0, 1] or a.get("hinted") not in [0, 1] or not isinstance(a.get("answer"), str) or len(a["answer"]) > 200 or not isinstance(a.get("elapsed_ms"), int) or not 0 <= a["elapsed_ms"] <= 86400000:
@@ -763,13 +816,16 @@ class Store(SchedulingStore):
             except (ValueError, KeyError, TypeError):
                 raise ValueError("Invalid practice dates.") from None
             normalized_attempts.append({**a, **self.validate_attempt_metadata(a), "created":datetime.fromisoformat(a["created"]).astimezone(timezone.utc).isoformat()})
-        scheduling = self.validate_scheduling(data.get("scheduling"),words,attempts) if data["version"]==2 else None
+        scheduling = self.validate_scheduling(data.get("scheduling"),words,attempts) if data["version"] in (2,3) else None
         added, id_map, essay_imported = 0, {}, False
         attempt_map = {}
         with self.db() as db:
             db.execute("BEGIN IMMEDIATE")
             if self.active_sessions(db,datetime.now(timezone.utc)):
                 raise ValueError("End your practice session before importing a backup.")
+            existing_personal={r[0] for r in db.execute("SELECT word FROM spelling_words")}
+            if len(existing_personal | personal)>10000:raise ValueError("The merged personal dictionary exceeds 10,000 words.")
+            db.executemany("INSERT OR IGNORE INTO spelling_words VALUES (?,?)",[(w,now()) for w in personal])
             full = not db.execute("SELECT 1 FROM words LIMIT 1").fetchone()
             for original, item in validated:
                 existing = db.execute("SELECT id FROM words WHERE word=?", (item["word"],)).fetchone()
@@ -787,8 +843,11 @@ class Store(SchedulingStore):
                     imported_word=db.execute("SELECT * FROM words WHERE id=?",(cur.lastrowid,)).fetchone()
                     save_selected(db,imported_word,original["audio_alternative"])
                 db.execute("UPDATE words SET sentence_flagged=? WHERE id=?",(original.get("sentence_flagged",0),cur.lastrowid))
+                db.execute("UPDATE words SET preparation_queue=?,essay_mistakes=?,essay_mistake_at=? WHERE id=?",(original.get("preparation_queue",""),original.get("essay_mistakes",0),original.get("essay_mistake_at",""),cur.lastrowid))
                 id_map[original["id"]] = cur.lastrowid
                 added += 1
+            for event in slips:
+                if event["word_id"] in id_map:db.execute("INSERT OR IGNORE INTO essay_slips VALUES (?,?,?,?)",(event["event_key"],id_map[event["word_id"]],event["created"],event["count"]))
             for a in normalized_attempts:
                 if a["word_id"] in id_map:
                     imported = db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created,exercise,session_kind,scheduler,due_before,stage_before,spaced_recall,evidence_version,legacy_advanced,fsrs_rating,scheduler_config) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (id_map[a["word_id"]], a["answer"], a["correct"], a["mode"], a["hinted"], a["elapsed_ms"], a["created"],a["exercise"],a["session_kind"],a["scheduler"],a["due_before"],a["stage_before"],a["spaced_recall"],a["evidence_version"],a["legacy_advanced"],a["fsrs_rating"],a["scheduler_config"]))

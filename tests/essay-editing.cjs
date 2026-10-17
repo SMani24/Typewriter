@@ -1,0 +1,20 @@
+const {edit}=require('../static/essay_editing.js');const assert=require('node:assert/strict');
+function enter(text){return edit(text,text.length,text.length,'Enter');}
+assert.equal(enter('1. First item').value,'1. First item\n2. ');
+assert.equal(enter('9) Last item').value,'9) Last item\n10) ');
+assert.equal(enter('  - First item').value,'  - First item\n  - ');
+assert.equal(enter('* Item').value,'* Item\n* ');
+assert.equal(enter('1. Item\n2. ').value,'1. Item\n');
+assert.equal(enter('    + ').value,'');
+assert.equal(enter('A normal paragraph.'),null);
+assert.equal(edit('1. item',3,3,'Enter').value,'1. \n2. item');
+assert.equal(edit('hello',2,2,'Tab').value,'he    llo');
+assert.equal(edit('  - item',8,8,'Tab').value,'      - item');
+assert.equal(edit('    - item',10,10,'Tab',true).value,'- item');
+assert.equal(edit('one\ntwo',0,7,'Tab').value,'    one\n    two');
+assert.equal(edit('    one\n    two',0,15,'Tab',true).value,'one\ntwo');
+assert.equal(edit('one\ntwo',0,4,'Tab').value,'    one\ntwo');
+assert.equal(edit('\nstart',0,0,'Tab').value,'    \nstart');
+assert.equal(edit('🙂 item',2,2,'Tab').start,6);
+assert.equal(edit('plain',0,0,'Tab',true).value,'plain');
+console.log('Essay editing rules passed: numbered/bullet lists, empty-list exit, selection indentation, outdent, Unicode, and ordinary paragraphs.');

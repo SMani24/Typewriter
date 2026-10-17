@@ -14,7 +14,7 @@ USER_AGENT = "Mozilla/5.0 (compatible; Typewriter personal dictionary lookup)"
 class Dictionary:
     def __init__(self, store, network):
         self.store, self.network = store, network
-        self._download_locks = {}
+        self._download_locks = tuple(Lock() for _ in range(64))
         self.alternatives = AudioSources(store,network)
 
     def lookup(self, word, timeout=None):
@@ -124,7 +124,7 @@ class Dictionary:
         import hashlib
         path = directory / (hashlib.sha256(name.encode()).hexdigest() + ".mp3")
         # Preloading and playback may arrive together; fetch a clip only once.
-        with self._download_locks.setdefault(url, Lock()):
+        with self._download_locks[hash(url)%len(self._download_locks)]:
             if not path.exists():
                 referer = "https://dictionary.cambridge.org/dictionary/english/" + quote(word["word"].replace(" ", "-"))
                 response = self.network.request("GET", url, stream=True, headers={"User-Agent": USER_AGENT, "Referer": referer})

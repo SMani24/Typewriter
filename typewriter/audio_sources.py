@@ -19,7 +19,7 @@ AGENT='Typewriter/1.0 (personal spelling practice; https://github.com/SMani24/Ty
 class AudioSources:
     def __init__(self, store, network):
         self.store,self.network=store,network
-        self.locks={}
+        self.locks=tuple(Lock() for _ in range(64))
 
     def target(self, word_id):
         word=self.store.word(word_id)
@@ -194,7 +194,7 @@ class AudioSources:
 
     def recording(self,record):
         path=self.path(record)
-        with self.locks.setdefault(record['id'],Lock()):
+        with self.locks[int(record['id'],16)%len(self.locks)]:
             if not path.is_file():
                 content,_=self.read(record['url'],media_provider=record['provider'],limit=5*1024*1024)
                 extension=path.suffix
@@ -218,7 +218,7 @@ class AudioSources:
             db.execute('INSERT OR REPLACE INTO cache VALUES (?,?)',(key,json.dumps(list(dict.fromkeys([*rejected,identity])))))
         return {'rejected':True}
 
-    def accept(self,word_id,identity):
+    def accept(self,word_id,identity,automatic=False):
         word,record=self.candidate(word_id,identity)
         if not self.path(record).is_file():raise ValueError('Preview this recording before choosing it.')
         with self.store.db() as db:
@@ -228,9 +228,10 @@ class AudioSources:
             if current['audio_file']:raise ValueError('Remove your uploaded recording before choosing another source.')
             row=db.execute('SELECT value FROM cache WHERE name=?',('rejected-audio:'+self.scope(word),)).fetchone()
             if row and identity in json.loads(row['value']):raise ValueError('This voice was rejected. Search again including rejected voices to reconsider it.')
-            record={**record,'approved_at':datetime.now(timezone.utc).isoformat()}
+            if automatic and current['preparation_queue']!='llm_auto':raise ValueError('Automatic voice selection was not requested for this word.')
+            record={**record,'approved_at':datetime.now(timezone.utc).isoformat(),'selection':'automatic' if automatic else 'manual'}
             save_selected(db,current,record)
-            db.execute('UPDATE words SET audio_verified=1,audio_flagged=0 WHERE id=?',(word_id,))
+            db.execute('UPDATE words SET audio_verified=?,audio_flagged=0 WHERE id=?',(int(not automatic),word_id))
         return self.store.word(word_id)
 
     def clear(self,word_id):

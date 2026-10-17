@@ -14,6 +14,9 @@ from .preparation import Preparation
 from .models import ModelAccessError
 from .spelling import check as check_spelling
 from .essay_words import EssayWords
+from .essay_intake import EssayIntake
+from .voice_preparation import VoicePreparation
+from .audio_processing import AudioProcessing
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -28,11 +31,15 @@ def create_app(data_dir=None, keys_path=None, background=True):
     keys = Path(keys_path or ROOT / "api_keys.txt")
     network = Network(store)
     dictionary = Dictionary(store, network)
+    audio_processing=AudioProcessing(store)
     enrichment = Enrichment(store, network, keys)
+    voice_preparation=VoicePreparation(store,dictionary)
+    if background:enrichment.after_prepare=voice_preparation.start
     preparation = Preparation(store)
     essay_words = EssayWords(store)
+    intake = EssayIntake(store)
     token = secrets.token_urlsafe(32)
-    app.extensions.update(store=store, network=network, dictionary=dictionary, enrichment=enrichment, preparation=preparation)
+    app.extensions.update(store=store, network=network, dictionary=dictionary, enrichment=enrichment, preparation=preparation, voice_preparation=voice_preparation,audio_processing=audio_processing)
 
     @app.before_request
     def protect_local_app():
@@ -81,7 +88,7 @@ def create_app(data_dir=None, keys_path=None, background=True):
 
     @app.get("/api/state")
     def state():
-        return jsonify(words=store.list_words(), progress=store.progress(), settings=store.settings(), enrichment=enrichment.snapshot(), logs=store.logs())
+        return jsonify(words=store.list_words(), progress=store.progress(), settings=store.settings(), enrichment=enrichment.snapshot(), logs=store.logs(),voice_preparation=voice_preparation.snapshot(),audio_processing=audio_processing.snapshot())
 
     @app.get("/api/essay")
     def essay():
@@ -93,11 +100,29 @@ def create_app(data_dir=None, keys_path=None, background=True):
 
     @app.post("/api/essay/spelling")
     def essay_spelling():
-        return jsonify(check_spelling(body().get("text")))
+        return jsonify(check_spelling(body().get("text"),store.personal_dictionary()))
+
+    @app.get("/api/essay/dictionary")
+    def personal_dictionary():
+        return jsonify(words=store.personal_dictionary())
+
+    @app.route("/api/essay/dictionary",methods=["POST","DELETE"])
+    def edit_personal_dictionary():
+        return jsonify(store.set_personal_word(body().get("word"),request.method=="DELETE"))
 
     @app.post("/api/essay/words")
     def extract_essay_words():
         return jsonify(essay_words.extract(body().get("text")))
+
+    @app.post("/api/essay/words/intake")
+    def queue_essay_words():
+        result=intake.add(body())
+        if background:enrichment.auto_schedule()
+        return jsonify(result)
+
+    @app.post("/api/words/<int:word_id>/activate")
+    def activate_word(word_id):
+        return jsonify(store.activate_word(word_id))
 
     @app.post("/api/essay/words/prompts")
     def export_essay_word_prompts():
@@ -151,7 +176,7 @@ def create_app(data_dir=None, keys_path=None, background=True):
 
     @app.get("/api/words/<int:word_id>/audio")
     def audio(word_id):
-        return send_file(dictionary.audio(word_id, preview=request.args.get("preview") == "1", accent=request.args.get("accent")), max_age=86400 if request.args.get("v") else 0)
+        return send_file(audio_processing.normalize(dictionary.audio(word_id, preview=request.args.get("preview") == "1", accent=request.args.get("accent"))), max_age=86400 if request.args.get("v") else 0)
 
     @app.patch("/api/words/<int:word_id>/audio")
     def audio_settings(word_id):
@@ -173,7 +198,7 @@ def create_app(data_dir=None, keys_path=None, background=True):
 
     @app.get("/api/words/<int:word_id>/pronunciation/alternatives/<identity>/audio")
     def preview_alternative(word_id,identity):
-        return send_file(dictionary.alternatives.preview(word_id,identity),max_age=0)
+        return send_file(audio_processing.normalize(dictionary.alternatives.preview(word_id,identity)),max_age=0)
 
     @app.post("/api/words/<int:word_id>/pronunciation/alternatives/<identity>/reject")
     def reject_alternative(word_id,identity):
@@ -296,7 +321,9 @@ def create_app(data_dir=None, keys_path=None, background=True):
 
     @app.post("/api/preparation/import")
     def import_preparation():
-        return jsonify(preparation.apply(body().get("text")))
+        result=preparation.apply(body().get("text"))
+        if background:voice_preparation.start()
+        return jsonify(result)
 
     @app.get("/api/export")
     def export():
@@ -310,4 +337,5 @@ def create_app(data_dir=None, keys_path=None, background=True):
 
     if background:
         enrichment.auto_schedule()
+        voice_preparation.start()
     return app
