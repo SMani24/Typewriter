@@ -172,17 +172,20 @@ physical SQLite backup in its local `backups/` directory before migration. Old
 words, stages, due instants, flags, settings and original answer fields are kept.
 Uncertain historical context stays unknown; excluded old events are checkpointed.
 
-JSON **format 2** includes both spelling states, library/policy configuration,
+JSON **format 3** includes both spelling states, library/policy configuration,
 active choice, coverage credit, reset cutoffs, event cursors, flags, answer history,
-and the essay draft. Local session tokens, provider keys and connection settings
-are excluded. Card IDs and event cursors are remapped when words are imported.
+the essay draft, personal spelling additions, preparation queues, and essay reminders.
+Older app versions reject these backups rather than losing the practice gate.
+Local session tokens, provider keys and connection settings are excluded. Card IDs and event cursors are remapped when words are imported.
 A complete restore into an empty notebook restores the scheduler choice. Merging
 into an existing notebook adds new words without replacing existing states or
 silently changing its engine or coverage counter. Repeated imports do not duplicate
 history. Unsupported state/configuration versions fail before writing.
 
-Older format-1 backups are accepted, with Legacy selected on an empty restore and
-fresh FSRS cards. Imported recordings still need checking; uploaded audio files
+Older format-1 and format-2 backups are accepted. Format 1 selects Legacy on an
+empty restore and creates fresh FSRS cards. SQLite schema 3 adds preparation queues,
+personal spelling entries and separate essay-mistake evidence, with a physical backup
+before migration. Imported recordings still need checking; uploaded audio files
 must be copied with the data directory, as before. To roll back application code
 to a version predating schema 2, stop the app and use a matching pre-upgrade
 physical backup. To change learning schedules normally, use the reversible

@@ -1,0 +1,451 @@
+{
+  "date": "2026-10-17",
+  "environment": {
+    "python": "3.10.12",
+    "linux": "7.1.1-76070101-generic",
+    "chrome": "155.0.8059.39"
+  },
+  "notes": [
+    "Synthetic isolated notebooks only; no real essays, vocabulary, keys, or process identities.",
+    "Earlier Playwright driver metadata understated essay length; corrected here to the actual 400 repetitions of 67 characters.",
+    "Absolute process PSS is not directly comparable across drivers with different Chrome startup flags."
+  ],
+  "backend_80": {
+    "words": 200,
+    "essay_characters": 100000,
+    "measured_cycles": 80,
+    "requests_per_cycle": 3,
+    "warmup_cycles": 10,
+    "samples": [
+      {
+        "cycle": 0,
+        "rss_mib": 54.26
+      },
+      {
+        "cycle": 40,
+        "rss_mib": 56.11
+      },
+      {
+        "cycle": 80,
+        "rss_mib": 56.22
+      }
+    ],
+    "growth_mib": 1.96,
+    "peak_rss_mib": 56.22,
+    "identical_essay_extractions_retained": 1,
+    "download_locks": 64,
+    "alternative_locks": 64,
+    "elapsed_seconds": 3.87
+  },
+  "backend_1000": {
+    "words": 200,
+    "essay_characters": 100000,
+    "measured_cycles": 1000,
+    "requests_per_cycle": 3,
+    "warmup_cycles": 10,
+    "samples": [
+      {
+        "cycle": 0,
+        "rss_mib": 54.08
+      },
+      {
+        "cycle": 500,
+        "rss_mib": 57.86
+      },
+      {
+        "cycle": 1000,
+        "rss_mib": 58.01
+      }
+    ],
+    "growth_mib": 3.93,
+    "peak_rss_mib": 58.01,
+    "identical_essay_extractions_retained": 1,
+    "download_locks": 64,
+    "alternative_locks": 64,
+    "elapsed_seconds": 41.59
+  },
+  "playwright_before_320_replacement": {
+    "words": 200,
+    "essay_characters": 26800,
+    "measured_cycles": 320,
+    "warmup_cycles": 10,
+    "browser": "155.0.8059.39",
+    "samples": [
+      {
+        "cycle": 0,
+        "js_heap_mib": 2.8,
+        "dom_nodes": 7547,
+        "live_elements": 4932,
+        "documents": 1,
+        "event_listeners": 136,
+        "browser_pss_mib": 247.83,
+        "processes_measured": 7,
+        "processes": [
+          {
+            "type": "browser",
+            "pss_mib": 66.46
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 10.28
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 68.03
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 35.55
+          },
+          {
+            "type": "GPU",
+            "pss_mib": 36.35
+          },
+          {
+            "type": "network.mojom.NetworkService",
+            "pss_mib": 25.2
+          },
+          {
+            "type": "storage.mojom.StorageService",
+            "pss_mib": 5.98
+          }
+        ]
+      },
+      {
+        "cycle": 80,
+        "js_heap_mib": 2.91,
+        "dom_nodes": 7627,
+        "live_elements": 4932,
+        "documents": 1,
+        "event_listeners": 136,
+        "browser_pss_mib": 279.87,
+        "processes_measured": 7,
+        "processes": [
+          {
+            "type": "browser",
+            "pss_mib": 67.5
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 9.93
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 106.54
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 28.24
+          },
+          {
+            "type": "GPU",
+            "pss_mib": 36.58
+          },
+          {
+            "type": "network.mojom.NetworkService",
+            "pss_mib": 25.2
+          },
+          {
+            "type": "storage.mojom.StorageService",
+            "pss_mib": 5.88
+          }
+        ]
+      },
+      {
+        "cycle": 160,
+        "js_heap_mib": 2.99,
+        "dom_nodes": 7707,
+        "live_elements": 4932,
+        "documents": 1,
+        "event_listeners": 136,
+        "browser_pss_mib": 316.34,
+        "processes_measured": 7,
+        "processes": [
+          {
+            "type": "browser",
+            "pss_mib": 66.96
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 9.93
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 146.39
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 25.04
+          },
+          {
+            "type": "GPU",
+            "pss_mib": 36.91
+          },
+          {
+            "type": "network.mojom.NetworkService",
+            "pss_mib": 25.27
+          },
+          {
+            "type": "storage.mojom.StorageService",
+            "pss_mib": 5.85
+          }
+        ]
+      },
+      {
+        "cycle": 320,
+        "js_heap_mib": 3.03,
+        "dom_nodes": 7867,
+        "live_elements": 4932,
+        "documents": 1,
+        "event_listeners": 136,
+        "browser_pss_mib": 384.92,
+        "processes_measured": 7,
+        "processes": [
+          {
+            "type": "browser",
+            "pss_mib": 62.36
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 10.04
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 222.52
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 25.13
+          },
+          {
+            "type": "GPU",
+            "pss_mib": 35.21
+          },
+          {
+            "type": "network.mojom.NetworkService",
+            "pss_mib": 23.94
+          },
+          {
+            "type": "storage.mojom.StorageService",
+            "pss_mib": 5.73
+          }
+        ]
+      }
+    ],
+    "heap_growth_mib": 0.23,
+    "elapsed_seconds": 248.5
+  },
+  "playwright_after_80_typing": {
+    "words": 200,
+    "essay_characters": 26800,
+    "edit_mode": "typing",
+    "measured_cycles": 80,
+    "warmup_cycles": 10,
+    "browser": "155.0.8059.39",
+    "samples": [
+      {
+        "cycle": 0,
+        "js_heap_mib": 3.22,
+        "dom_nodes": 7540,
+        "live_elements": 4932,
+        "documents": 1,
+        "event_listeners": 136,
+        "browser_pss_mib": 237.59,
+        "processes_measured": 7,
+        "processes": [
+          {
+            "type": "browser",
+            "pss_mib": 61.22
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 10.07
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 66.4
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 35.81
+          },
+          {
+            "type": "GPU",
+            "pss_mib": 34.75
+          },
+          {
+            "type": "network.mojom.NetworkService",
+            "pss_mib": 23.39
+          },
+          {
+            "type": "storage.mojom.StorageService",
+            "pss_mib": 5.94
+          }
+        ]
+      },
+      {
+        "cycle": 40,
+        "js_heap_mib": 3.27,
+        "dom_nodes": 7540,
+        "live_elements": 4932,
+        "documents": 1,
+        "event_listeners": 136,
+        "browser_pss_mib": 250.88,
+        "processes_measured": 7,
+        "processes": [
+          {
+            "type": "browser",
+            "pss_mib": 62
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 9.67
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 87.62
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 27.65
+          },
+          {
+            "type": "GPU",
+            "pss_mib": 34.56
+          },
+          {
+            "type": "network.mojom.NetworkService",
+            "pss_mib": 23.43
+          },
+          {
+            "type": "storage.mojom.StorageService",
+            "pss_mib": 5.94
+          }
+        ]
+      },
+      {
+        "cycle": 80,
+        "js_heap_mib": 3.32,
+        "dom_nodes": 7540,
+        "live_elements": 4932,
+        "documents": 1,
+        "event_listeners": 136,
+        "browser_pss_mib": 275.12,
+        "processes_measured": 7,
+        "processes": [
+          {
+            "type": "browser",
+            "pss_mib": 68.35
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 9.9
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 100.97
+          },
+          {
+            "type": "renderer",
+            "pss_mib": 28.38
+          },
+          {
+            "type": "GPU",
+            "pss_mib": 36.4
+          },
+          {
+            "type": "network.mojom.NetworkService",
+            "pss_mib": 24.95
+          },
+          {
+            "type": "storage.mojom.StorageService",
+            "pss_mib": 6.17
+          }
+        ]
+      }
+    ],
+    "after_undo_reset": {
+      "cycle": "after-undo-reset",
+      "js_heap_mib": 3.32,
+      "dom_nodes": 7544,
+      "live_elements": 4932,
+      "documents": 1,
+      "event_listeners": 136,
+      "browser_pss_mib": 275.12,
+      "processes_measured": 7,
+      "processes": [
+        {
+          "type": "browser",
+          "pss_mib": 68.36
+        },
+        {
+          "type": "renderer",
+          "pss_mib": 9.9
+        },
+        {
+          "type": "renderer",
+          "pss_mib": 100.96
+        },
+        {
+          "type": "renderer",
+          "pss_mib": 28.38
+        },
+        {
+          "type": "GPU",
+          "pss_mib": 36.4
+        },
+        {
+          "type": "network.mojom.NetworkService",
+          "pss_mib": 24.95
+        },
+        {
+          "type": "storage.mojom.StorageService",
+          "pss_mib": 6.17
+        }
+      ]
+    },
+    "heap_growth_mib": 0.1,
+    "elapsed_seconds": 68.5
+  },
+  "direct_after_320_typing": {
+    "instrumentation": "Direct CDP without Network.enable or Playwright",
+    "words": 200,
+    "essay_characters": 26800,
+    "edit_mode": "typing",
+    "measured_cycles": 320,
+    "warmup_cycles": 10,
+    "samples": [
+      {
+        "cycle": 0,
+        "js_heap_mib": 1.52,
+        "dom_nodes": 7515,
+        "live_elements": 4932,
+        "documents": 1,
+        "event_listeners": 110,
+        "browser_pss_mib": 302.18,
+        "processes_measured": 10
+      },
+      {
+        "cycle": 160,
+        "js_heap_mib": 1.55,
+        "dom_nodes": 7517,
+        "live_elements": 4932,
+        "documents": 1,
+        "event_listeners": 110,
+        "browser_pss_mib": 312.86,
+        "processes_measured": 9
+      },
+      {
+        "cycle": 320,
+        "js_heap_mib": 1.64,
+        "dom_nodes": 7517,
+        "live_elements": 4932,
+        "documents": 1,
+        "event_listeners": 110,
+        "browser_pss_mib": 298.97,
+        "processes_measured": 8
+      }
+    ],
+    "elapsed_seconds": 33.3
+  }
+}
