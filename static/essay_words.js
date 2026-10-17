@@ -44,7 +44,7 @@
       const row=rows[Number(element.dataset.row)];element.querySelector('input').disabled=busy || row.handled;
       element.querySelector('.essay-word-status').textContent=rowStatus(row);
       element.querySelector('[data-add-row]').disabled=busy || row.handled || !normalize(row.corrected);
-      element.querySelector('[data-add-row]').textContent=row.handled?'Saved':existing().has(normalize(row.corrected))?'Review again':'Queue word';
+      element.querySelector('[data-add-row]').textContent=row.handled?'Saved':existing().has(normalize(row.corrected))?'Confirm mistake':'Queue word';
       element.querySelectorAll('[data-discard-row],[data-accept-row]').forEach(button=>button.disabled=busy);
     });
   }
@@ -65,14 +65,17 @@
   async function open(){await restore();q('#essay-words-size').value=state.settings.offline_batch_size || 20;q('#essay-words-dialog').showModal();render();await run(extract);}
   function add(items){
     intakeItems=items.filter(row=>!row.handled && normalize(row.corrected));if(!intakeItems.length)throw new Error('Check at least one intended spelling first.');
-    q('#essay-intake-count').textContent=`${new Set(intakeItems.map(row=>normalize(row.corrected))).size} words. They will be saved outside practice until prepared; existing words will be marked for review.`;
+    q('#essay-intake-count').textContent=`${new Set(intakeItems.map(row=>normalize(row.corrected))).size} words. New words will be saved outside practice until prepared. Existing practice words will be marked for review; unfinished words keep their preparation queue.`;
     q('#essay-intake-dialog').showModal();
   }
   async function confirmIntake(){
     const choice=q('input[name="essay-intake-mode"]:checked').value;
     const mode=choice==='llm' && q('#essay-intake-auto-voice').checked?'llm_auto':choice;
     const result=await api('/essay/words/intake','POST',{mode,words:intakeItems.map(row=>({extraction_id:row.extraction_id,id:row.id,word:normalize(row.corrected)}))});
-    for(const row of intakeItems){row.handled=true;row.revision++;row.actionStatus=existing().has(normalize(row.corrected))?'Essay mistake recorded · available for review.':mode==='manual'?'In the manual preparation queue.':'In the LLM preparation queue.';}
+    for(const row of intakeItems){
+      const prior=state.words.find(word=>word.word===normalize(row.corrected));row.handled=true;row.revision++;
+      row.actionStatus=prior?.preparation_queue ? `Already in the ${prior.preparation_queue==='manual'?'manual':'LLM'} preparation queue.` : prior ? result.marked.includes(prior.id)?'Essay mistake recorded · available for review.':'Already in your notebook.' : mode==='manual'?'In the manual preparation queue.':'In the LLM preparation queue.';
+    }
     q('#essay-intake-dialog').close();intakeItems=[];remember();await refresh();message(`${result.added.length} words queued · ${result.marked.length} words marked for another review. Review scores were kept.`);render();
   }
   async function exportPrompts() {
