@@ -10,7 +10,7 @@ from collections import OrderedDict
 from pathlib import Path
 from threading import Lock,Semaphore
 
-VERSION='voice-loudness-v1'
+VERSION='voice-loudness-v2'
 
 
 class AudioProcessing:
@@ -59,6 +59,10 @@ class AudioProcessing:
                     mean=re.search(r'mean_volume:\s*(-?[\d.]+) dB',measured);peak=re.search(r'max_volume:\s*(-?[\d.]+) dB',measured)
                     gain=min(-18-float(mean[1]),-1.5-float(peak[1]),30) if mean and peak else 0
                     filters=f'aformat=channel_layouts=mono,volume={gain:.3f}dB'
+                # Trim only near-silence after level adjustment, preserving a short natural lead-in.
+                # Silent clips are left intact rather than producing a header-only MP3.
+                if math.isfinite(float(data.get('input_tp','-inf'))) and float(data['input_tp'])>-70:
+                    filters+=',silenceremove=start_periods=1:start_duration=0.03:start_threshold=-60dB:start_silence=0.04'
                 directory.mkdir(parents=True,exist_ok=True)
                 with tempfile.NamedTemporaryFile(dir=directory,suffix='.mp3',delete=False) as output:temporary=Path(output.name)
                 self.command(source,filters,temporary)

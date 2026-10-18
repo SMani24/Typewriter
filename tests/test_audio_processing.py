@@ -58,3 +58,16 @@ class AudioProcessingTests(unittest.TestCase):
 
     def test_missing_ffmpeg_preserves_playback(self):
         source=self.tone('source',5000);self.audio.ffmpeg=None;self.assertEqual(self.audio.normalize(source),source)
+
+    def test_leading_silence_is_trimmed_without_clipping_the_spoken_part(self):
+        source=self.tone('padded',5000,duration=0.6)
+        with wave.open(str(source),'rb') as file:frames=file.readframes(file.getnframes())
+        with wave.open(str(source),'wb') as file:
+            file.setparams((1,2,16000,0,'NONE','not compressed'));file.writeframes(b'\0\0'*16000+frames+b'\0\0'*3200)
+        digest=hashlib.sha256(source.read_bytes()).hexdigest();result=self.audio.normalize(source)
+        text=self.audio.command(result,'silencedetect=n=-45dB:d=0.03',None)
+        match=re.search(r'silence_start: 0(?:\.\d+)?\s.*?silence_end: ([\d.]+)',text,re.S)
+        if match:self.assertLess(float(match[1]),0.12)
+        duration=re.search(r'Duration: (\d+):(\d+):([\d.]+)',text)
+        self.assertIsNotNone(duration);self.assertGreater(float(duration[3]),0.65);self.assertLess(float(duration[3]),1.0)
+        self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(),digest)
