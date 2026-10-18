@@ -165,6 +165,25 @@ it off leaves **Listen** and **Alt+P** available. The **Playback volume** slider
 practice audio and previews, including mute. **Play the word after checking an answer**
 works independently of sound when a task opens. With FFmpeg installed, current and
 future playback uses disk-cached loudness-adjusted copies; original recordings are kept.
+Quiet loading also prepares the next known checked recording. Leading near-silence
+is trimmed from the playback copy; recordings can still need a first download through
+your proxy. A stalled load shows a retry message after 20 seconds rather than waiting
+indefinitely.
+
+**Advanced settings** contains the minimum gap for repeated automatic audio and the
+duration of an audio-only pause, along with API request budgets and pacing. Automatic
+replays wait for the recording to finish, then leave the saved gap (1.2 seconds by
+default). Manual **Listen / Alt+P** remains immediate. During a drill, **Mute automatic
+audio for this drill** turns off both opening and answer-feedback sound for that
+session; manual replay still works, and a new drill uses your saved preferences.
+
+In an audio-only question, **Pause audio-only** temporarily excludes those exercises
+without flagging recordings, grading a skip as a mistake, or changing saved exercise
+preferences. Other enabled clues remain available. If the current word has no other
+enabled clue, the session ends with its checked answers preserved; start another
+session for eligible words. The pause survives reload until its timer expires and can
+be ended early with **Resume audio-only now**. The default pause is ten minutes.
+
 Settings prompt you to save or discard changes before leaving the page. Changing a
 word's spelling restarts its schedule and word-level statistics while preserving
 past answers in global history; check its sentence, tip, and pronunciation again.
@@ -364,3 +383,24 @@ npm test
 ```
 
 Node is needed only for these browser checks. The app itself runs with Python.
+
+
+## Troubleshooting an unexpected failure
+
+**Settings → Application log → Download log** includes curated events and diagnostic
+references. Browser failures include script locations. Unexpected server and process
+failures include exception types and stack locations, without exception messages,
+source-code excerpts, request bodies, keys, or notebook contents. Diagnostic files in
+`data/` rotate at 256 KiB with two older files retained. Browser reports are rate-limited.
+The launcher keeps earlier startup output and rotates it on a later launch once it
+passes 512 KiB.
+
+If the app stops responding, note the steps and approximate time, then download the
+log after reopening it. A forcibly killed process cannot record its own termination;
+a missing exception record does not prove that no process-level failure happened.
+For duplicate spellings, the add-word dialog now offers to edit the saved word;
+existing material is kept until you explicitly save changes. Bulk entry can add only
+the new spellings.
+
+The [typing-confidence proposal](typing-confidence.md) discusses possible future
+use of response timing and self-correction. It is not implemented.

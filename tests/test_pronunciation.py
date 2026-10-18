@@ -49,7 +49,7 @@ class PronunciationTests(unittest.TestCase):
             self.dictionary.audio(self.id)
             lookup.assert_not_called()
             self.dictionary.audio(self.id,accent='us')
-            lookup.assert_called_once_with('necessary')
+            lookup.assert_called_once_with('necessary',timeout=(5,12))
         self.assertEqual(self.store.word(self.id)['audio_urls'],self.urls)
 
     def test_uploaded_recording_overrides_both_accents_and_flags_are_honoured(self):
