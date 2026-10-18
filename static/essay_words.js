@@ -41,7 +41,7 @@
     q('#essay-words-preview').disabled=busy || !q('#essay-words-reply').value.trim();
     ['#essay-words-extract','#essay-words-size','#essay-words-context','#essay-words-file'].forEach(id=>q(id).disabled=busy);
     q('#essay-words-list').querySelectorAll('[data-row]').forEach(element=>{
-      const row=rows[Number(element.dataset.row)];element.querySelector('input').disabled=busy || row.handled;
+      const row=rows[Number(element.dataset.row)];if(!row)return;element.querySelector('input').disabled=busy || row.handled;
       element.querySelector('.essay-word-status').textContent=rowStatus(row);
       element.querySelector('[data-add-row]').disabled=busy || row.handled || !normalize(row.corrected);
       element.querySelector('[data-add-row]').textContent=row.handled?'Saved':existing().has(normalize(row.corrected))?'Confirm mistake':'Queue word';
@@ -49,7 +49,7 @@
     });
   }
   function render(){
-    setMarkup(q('#essay-words-list'),rows.length?rows.map((row,i)=>`<div class="essay-word-row" data-row="${i}"><div class="essay-word-source"><strong>${escapeHtml(row.original)}</strong><span>${row.count} ${row.count===1?'occurrence':'occurrences'}${row.current?'':' · earlier draft'}</span></div><div class="essay-word-correction"><label class="sr-only" for="essay-correction-${i}">Correct spelling for ${escapeHtml(row.original)}</label><input id="essay-correction-${i}" data-correction="${i}" type="text" maxlength="80" autocomplete="off" spellcheck="false" placeholder="Intended spelling…" value="${escapeHtml(row.corrected)}"><span class="essay-word-status field-note"></span>${row.note?`<small class="essay-word-reason">${escapeHtml(row.note)}</small>`:''}</div><div class="essay-row-actions"><button class="text-button" data-add-row="${i}">${existing().has(normalize(row.corrected))?'Review again':'Queue word'}</button><button class="icon-button" data-accept-row="${i}" aria-label="Accept spelling ${escapeHtml(row.original)} in dictionary" title="Add spelling to your personal dictionary">✓</button><button class="icon-button" data-discard-row="${i}" aria-label="Discard flag ${escapeHtml(row.original)}" title="Discard this flag">×</button></div></div>`).join(''):'<p class="muted">No flags in this list. Your next new spelling flags will appear here.</p>');
+    setMarkup(q('#essay-words-list'),rows.length?rows.map((row,i)=>`<div class="essay-word-row" data-row="${i}"><div class="essay-word-source"><strong>${escapeHtml(row.original)}</strong><span>${row.count} ${row.count===1?'occurrence':'occurrences'}${row.current?'':' · earlier draft'}</span></div><div class="essay-word-correction"><label class="sr-only" for="essay-correction-${i}">Correct spelling for ${escapeHtml(row.original)}</label><input id="essay-correction-${i}" data-correction="${i}" type="text" maxlength="80" autocomplete="off" spellcheck="false" placeholder="Intended spelling…" value="${escapeHtml(row.corrected)}"><span class="essay-word-status field-note"></span>${row.note?`<small class="essay-word-reason">${escapeHtml(row.note)}</small>`:''}</div><div class="essay-row-actions"><button class="text-button" data-add-row="${i}">${existing().has(normalize(row.corrected))?'Review again':'Queue word'}</button><button class="icon-button" data-accept-row="${i}" aria-label="Accept spelling ${escapeHtml(row.original)} in dictionary" title="Add spelling to your personal dictionary">${icon('book-add')}</button><button class="icon-button" data-discard-row="${i}" aria-label="Discard flag ${escapeHtml(row.original)}" title="Discard this flag">${icon('discard')}</button></div></div>`).join(''):'<p class="muted">No flags in this list. Your next new spelling flags will appear here.</p>');
     update();
   }
   async function run(action){if(busy)return;busy=true;update();try{await action();}catch(error){message(error.message || 'Please try again.',true);}finally{busy=false;render();}}
@@ -62,7 +62,8 @@
     q('#essay-words-source-note').textContent='New flags appear first. Earlier flags and your corrections stay until you discard them. Your essay is unchanged.';
     message(admitted.length<fresh.length?'This list has reached 500 flags. Discard completed flags to make room; your earlier words have been kept.':result.limited?'Showing up to 500 unique flags.':admitted.length?`${admitted.length} new flags added above your earlier words.`:'No new flags. Your earlier review list is kept.');
   }
-  async function open(){await restore();q('#essay-words-size').value=state.settings.offline_batch_size || 20;q('#essay-words-dialog').showModal();render();await run(extract);}
+  let opening=false;
+  async function open(){if(opening || q('#essay-words-dialog').open)return;opening=true;try{await restore();q('#essay-words-size').value=state.settings.offline_batch_size || 20;q('#essay-words-dialog').showModal();render();await run(extract);}finally{opening=false;}}
   function add(items){
     intakeItems=items.filter(row=>!row.handled && normalize(row.corrected));if(!intakeItems.length)throw new Error('Check at least one intended spelling first.');
     q('#essay-intake-count').textContent=`${new Set(intakeItems.map(row=>normalize(row.corrected))).size} words. New words will be saved outside practice until prepared. Existing practice words will be marked for review; unfinished words keep their preparation queue.`;
@@ -99,10 +100,11 @@
     message('Reply checked. Use suggestions to put them in the review list, then check spellings before adding words.');
   }
   function useSuggestions() {
-    if(!reply || replyText!==q('#essay-words-reply').value) return;
+    if(busy || !reply || replyText!==q('#essay-words-reply').value) return;
     let kept=0,used=0;
     for(const entry of reply.words) {
       let row=rows.find(r=>key(r.original)===key(entry.original));
+      if(row?.handled){kept++;continue;}
       if(row && (row.extraction_id===entry.extraction_id ? row.revision!==entry.snapshot_revision : row.edited)) {kept++;continue;}
       if(discarded.has(key(entry.original))) {kept++;continue;}
       if(entry.action==='skip'){rows=rows.filter(r=>key(r.original)!==key(entry.original));discarded.add(key(entry.original));used++;continue;}
@@ -134,11 +136,12 @@
     event.preventDefault();const row=rows[Number(event.target.dataset.correction)];if(normalize(row.corrected) && !row.handled)add([row]);
   });
   q('#essay-words-list').addEventListener('click',event=>{
-    const addButton=event.target.closest('[data-add-row]');if(addButton){add([rows[Number(addButton.dataset.addRow)]]);return;}
+    if(busy)return;
+    const addButton=event.target.closest('[data-add-row]');if(addButton){guarded(()=>add([rows[Number(addButton.dataset.addRow)]]));return;}
     const discard=event.target.closest('[data-discard-row]');if(discard){const index=Number(discard.dataset.discardRow);discarded.add(key(rows[index].original));rows.splice(index,1);remember();render();return;}
     const accept=event.target.closest('[data-accept-row]');if(accept)guarded(()=>TypewriterDictionary.open(rows[Number(accept.dataset.acceptRow)].original));
   });
-  document.addEventListener('typewriter-dictionary-changed',()=>guarded(async()=>{const accepted=new Set((await api('/essay/dictionary')).words);rows=rows.filter(row=>!accepted.has(key(row.original)));remember();if(q('#essay-words-dialog').open)await run(extract);}));
+  document.addEventListener('typewriter-dictionary-changed',()=>guarded(async()=>{const accepted=new Set((await api('/essay/dictionary')).words);rows=rows.filter(row=>!accepted.has(key(row.original)));remember();render();if(q('#essay-words-dialog').open)await run(extract);}));
   q('#essay-words-file').addEventListener('change',()=>run(async()=>{
     const file=q('#essay-words-file').files[0];if(!file) return;
     if(file.size>2*1024*1024) throw new Error('Choose a reply smaller than 2 MB.');

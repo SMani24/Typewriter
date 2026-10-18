@@ -17,11 +17,12 @@ from .essay_words import EssayWords
 from .essay_intake import EssayIntake
 from .voice_preparation import VoicePreparation
 from .audio_processing import AudioProcessing
+from .diagnostics import Diagnostics
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def create_app(data_dir=None, keys_path=None, background=True):
+def create_app(data_dir=None, keys_path=None, background=True,diagnostics=None):
     app = Flask(__name__, template_folder=str(ROOT / "templates"), static_folder=str(ROOT / "static"))
     app.config.update(MAX_CONTENT_LENGTH=32 * 1024 * 1024, TRUSTED_HOSTS=["127.0.0.1", "localhost", "[::1]"])
     directory = Path(data_dir or os.environ.get("TYPEWRITER_DATA_DIR", ROOT / "data"))
@@ -32,6 +33,7 @@ def create_app(data_dir=None, keys_path=None, background=True):
     network = Network(store)
     dictionary = Dictionary(store, network)
     audio_processing=AudioProcessing(store)
+    diagnostics=diagnostics or Diagnostics(directory)
     enrichment = Enrichment(store, network, keys)
     voice_preparation=VoicePreparation(store,dictionary)
     if background:enrichment.after_prepare=voice_preparation.start
@@ -73,8 +75,10 @@ def create_app(data_dir=None, keys_path=None, background=True):
         if isinstance(error, HTTPException):
             return jsonify(error=error.description), error.code
         # Network exceptions may carry API keys, URLs or proxy credentials.
-        store.log("error", "An unexpected application error occurred. Saved words are safe.")
-        return jsonify(error="Something went wrong. Your saved words are safe. Please try again."), 500
+        identity=diagnostics.exception(error)
+        try:store.log("error", f"An unexpected application error occurred. Reference: {identity or 'unavailable'}. Saved words are safe.")
+        except Exception:pass
+        return jsonify(error="Something went wrong. Your saved words are safe. Please try again.",reference=identity), 500
 
     def body():
         result = request.get_json()
@@ -88,7 +92,11 @@ def create_app(data_dir=None, keys_path=None, background=True):
 
     @app.get("/api/state")
     def state():
-        return jsonify(words=store.list_words(), progress=store.progress(), settings=store.settings(), enrichment=enrichment.snapshot(), logs=store.logs(),voice_preparation=voice_preparation.snapshot(),audio_processing=audio_processing.snapshot())
+        return jsonify(words=store.list_words(), progress=store.progress(), settings=store.settings(), enrichment=enrichment.snapshot(), logs=store.logs(),voice_preparation=voice_preparation.snapshot(),audio_processing=audio_processing.snapshot(),audio_pause_until=store.audio_pause_until())
+
+    @app.post('/api/practice/audio-pause')
+    def pause_audio():
+        return jsonify(until=store.pause_audio(body().get('resume',False)))
 
     @app.get("/api/essay")
     def essay():
@@ -136,7 +144,13 @@ def create_app(data_dir=None, keys_path=None, background=True):
     @app.get("/api/logs/export")
     def export_logs():
         lines = [f"{r['created']} [{r['level']}] {r['message']}" for r in reversed(store.logs(500))]
-        return Response("\n".join(lines) + "\n", mimetype="text/plain", headers={"Content-Disposition": 'attachment; filename="typewriter-log.txt"'})
+        return Response("\n".join(lines) + "\n\nFailure locations (no messages or notebook contents):\n"+diagnostics.export(), mimetype="text/plain", headers={"Content-Disposition": 'attachment; filename="typewriter-log.txt"'})
+
+    @app.post('/api/diagnostics')
+    def record_diagnostic():
+        identity=diagnostics.browser(body())
+        if identity:store.log('error',f'A browser failure was recorded. Reference: {identity}. Download the application log for its script location.')
+        return jsonify(reference=identity),202
 
     @app.get("/api/health")
     def health():
@@ -295,7 +309,7 @@ def create_app(data_dir=None, keys_path=None, background=True):
 
     @app.get("/api/enrichment")
     def job():
-        return jsonify(enrichment.snapshot())
+        return jsonify(**enrichment.snapshot(),audio_pause_until=store.audio_pause_until())
 
     @app.post("/api/models/refresh")
     def models():

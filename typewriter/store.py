@@ -1,5 +1,6 @@
 """SQLite storage, honest practice statistics, and a deliberately simple scheduler."""
 import hashlib
+import math
 import json
 import re
 import sqlite3
@@ -26,6 +27,7 @@ DEFAULTS = {
     "pronunciation_accent": "uk", "scheduler": "legacy",
     "autoplay_sentence": False, "autoplay_definition": False, "autoplay_audio": True,
     "play_after_answer": False, "autoplay_meaning": False, "autoplay_drill": False, "autoplay_correction": False,
+    "audio_repeat_gap_seconds": 1.2, "audio_pause_minutes": 10,
 }
 
 
@@ -192,6 +194,11 @@ class Store(SchedulingStore):
             raise ValueError("Choose one of the four text sizes.")
         if values["pronunciation_accent"] not in ("uk", "us"):
             raise ValueError("Choose UK or US pronunciation.")
+        gap=values["audio_repeat_gap_seconds"]
+        if type(gap) not in (float,int) or not math.isfinite(gap) or not 0<=gap<=10:
+            raise ValueError("Audio repeat spacing must be between 0 and 10 seconds.")
+        if type(values["audio_pause_minutes"]) is not int or not 1<=values["audio_pause_minutes"]<=120:
+            raise ValueError("Audio-only pauses must last between 1 and 120 minutes.")
         if values["quiz_interval_mode"] not in ("fixed", "range"):
             raise ValueError("Choose a fixed quiz interval or a random range.")
         for key in ("quiz_interval_min", "quiz_interval_max"):

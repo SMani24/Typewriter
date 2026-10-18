@@ -1,12 +1,14 @@
 """Cambridge lookup adapted from AnkiAutomata's sense-based parser."""
 import json
 import tempfile
+import requests
 from pathlib import Path
 from threading import Lock
 from urllib.parse import quote, urljoin, urlparse
 from bs4 import BeautifulSoup
 from .store import clean_word, contains_word
 from .audio_sources import AudioSources
+from .network import NetworkError
 
 USER_AGENT = "Mozilla/5.0 (compatible; Typewriter personal dictionary lookup)"
 
@@ -113,7 +115,7 @@ class Dictionary:
         if not word["audio_urls"] and accent == "uk":
             url = word["audio_url"]
         if not url:
-            lookup = self.lookup(word["word"])
+            lookup = self.lookup(word["word"],timeout=(5,12))
             url = lookup["audio"].get(accent)
             with self.store.db() as db:
                 db.execute("UPDATE words SET audio_urls=?,audio_url=? WHERE id=?", (json.dumps(lookup["audio"]), url or word["audio_url"], word_id))
@@ -127,7 +129,7 @@ class Dictionary:
         with self._download_locks[hash(url)%len(self._download_locks)]:
             if not path.exists():
                 referer = "https://dictionary.cambridge.org/dictionary/english/" + quote(word["word"].replace(" ", "-"))
-                response = self.network.request("GET", url, stream=True, headers={"User-Agent": USER_AGENT, "Referer": referer})
+                response = self.network.request("GET", url, stream=True, timeout=(5,12),headers={"User-Agent": USER_AGENT, "Referer": referer})
                 try:
                     if response.status_code != 200:
                         raise ValueError("Pronunciation is unavailable right now.")
@@ -147,6 +149,10 @@ class Dictionary:
                     finally:
                         if temporary:
                             temporary.unlink(missing_ok=True)
+                except requests.RequestException:
+                    message='The pronunciation download was interrupted. Try Listen again or check your proxy.'
+                    self.store.log('warning',message)
+                    raise NetworkError(message) from None
                 finally:
                     response.close()
         return path

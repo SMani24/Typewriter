@@ -68,7 +68,9 @@ def launch(preferred=8080):
         log_path = directory / "launcher.log"
         # A short local startup log is useful if dependencies are missing. It contains
         # no request bodies, keys or connection settings, and is ignored by Git.
-        with log_path.open("w") as log:
+        if log_path.exists() and log_path.stat().st_size>512*1024:
+            log_path.replace(log_path.with_suffix('.previous.log'))
+        with log_path.open("a") as log:
             log_path.chmod(0o600)
             child = subprocess.Popen([str(python), "-u", str(ROOT / "app.py"), "--port", str(port)], cwd=ROOT, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
         for _ in range(150):

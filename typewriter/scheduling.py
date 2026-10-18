@@ -58,7 +58,7 @@ def spelling_types(word, settings):
     return [name for name, ready in (
         ('sentence', bool(word['clue'])),
         ('definition', bool(word['definition'] and not word['meaning_flagged'])),
-        ('audio', audio_eligible(word,settings))) if ready and settings[name+'_enabled']]
+        ('audio', audio_eligible(word,settings) and (not settings.get('audio_pause_until') or utc(settings['audio_pause_until'])<=datetime.now(timezone.utc)))) if ready and settings[name+'_enabled']]
 
 
 def order_key(word, selected):
@@ -71,6 +71,17 @@ def order_key(word, selected):
 
 
 class SchedulingStore:
+    def audio_pause_until(self):
+        with self.db() as db:row=db.execute("SELECT value FROM cache WHERE name='audio-pause-until'").fetchone()
+        value=json.loads(row['value']) if row else ''
+        return value if value and utc(value)>datetime.now(timezone.utc) else ''
+
+    def pause_audio(self,resume=False):
+        if type(resume) is not bool:raise ValueError('Choose pause or resume.')
+        until='' if resume else (datetime.now(timezone.utc)+timedelta(minutes=self.settings()['audio_pause_minutes'])).isoformat()
+        with self.db() as db:db.execute("INSERT OR REPLACE INTO cache VALUES ('audio-pause-until',?)",(json.dumps(until),))
+        return until
+
     def init_scheduling(self, db):
         db.executescript('''
             CREATE TABLE IF NOT EXISTS spelling_schedules (
@@ -160,6 +171,7 @@ class SchedulingStore:
             if self.active_sessions(db,at):
                 raise ValueError('A practice session is already open. End it in the other tab, or wait three minutes after closing that tab.')
             settings = self.settings()
+            settings['audio_pause_until']=self.audio_pause_until()
             selected = engine(db)
             # list_words uses the same committed revision; this transaction excludes writers.
             candidates = [w for w in self.list_words() if scope is None or w['id'] in scope]
@@ -188,6 +200,7 @@ class SchedulingStore:
     def _offer(self, db, token, at, words):
         session = self.session_row(db,token,at)
         settings = json.loads(session['settings'])
+        settings['audio_pause_until']=self.audio_pause_until()
         offered = json.loads(session['offered'])
         remaining = set(json.loads(session['remaining']))
         if settings['review_session_size'] and len(offered) >= settings['review_session_size']:

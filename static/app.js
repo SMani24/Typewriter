@@ -29,12 +29,15 @@ const paths = {
   upload:'<path d="M12 16V4m-4 4 4-4 4 4M4 16v5h16v-5"/>',
   edit:'<path d="m15 4 5 5M4 20l1-6L16 3l5 5-11 11ZM14 20h7"/>',
   volume:'<path d="M11 4 6 8H3v8h3l5 4ZM15 8q4 4 0 8m3-11q7 7 0 14"/>',
+  'book-add':'<path d="M3 4h7a3 3 0 0 1 3 3v14a4 4 0 0 0-4-2H3ZM13 7a3 3 0 0 1 3-3h5v15h-4M17 8v6m-3-3h6"/>',
+  discard:'<path d="m4 7 6-3 9 9-6 7H8l-5-5ZM7 10l7 7M13 20h8"/>',
   trash:'<path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/>',
 };
 const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.book}</svg>`;
 function hydrateIcons(root = document) { $$('[data-icon]', root).forEach(el => el.innerHTML = icon(el.dataset.icon)); }
 let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer, audioSequence = 0, answerBusy = false, drillMatches = [], drillHighlight = 0, preparedPreviewText = null;
-let pendingFailure = null, focusedModal = null;
+let pendingFailure = null, focusedModal = null, duplicateEntry = null;
+let audioWaitCancel=null,lastAudioUrl='',lastAudioFinished=-Infinity;
 document.addEventListener('focusin',event=>{
   const modal = event.target.closest('dialog[open]');
   if (modal) focusedModal = modal;
@@ -200,6 +203,8 @@ function renderLibrary() {
   $('[data-filter="confident"]').textContent=state.settings.scheduler==='fsrs' ? 'Reviewing' : 'Confident';
 }
 function renderQueue() {
+  const paused=audioOnlyPaused();$('#audio-pause-note').hidden=!paused;
+  $('#audio-pause-text').textContent=paused ? `Audio-only exercises paused until ${new Date(state.audio_pause_until).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}. Other enabled exercises are available.` : '';
   const job = state.enrichment, usesApi = state.settings.preparation_method === 'api';
   const queuedManual=state.words.filter(w=>w.preparation_queue==='manual').length;
   const voice=state.voice_preparation;
@@ -330,7 +335,7 @@ function settingsPayload() {
   const form = $('#settings-form'), result = {};
   ['proxy_enabled','auto_ai','review_enabled','drill_enabled','sentence_enabled','definition_enabled','audio_enabled','meaning_enabled','autoplay_sentence','autoplay_definition','autoplay_audio','autoplay_meaning','autoplay_drill','autoplay_correction','play_after_answer','clear_proxy_password'].forEach(k => result[k] = form.elements[k].checked);
   ['proxy_type','proxy_host','proxy_username','proxy_password','model','preparation_method','pronunciation_accent','text_size'].forEach(k => result[k] = form.elements[k].value.trim());
-  ['proxy_port','batch_size','daily_budget','requests_per_minute','offline_batch_size','review_session_size','audio_volume'].forEach(k => result[k] = Number(form.elements[k].value));
+  ['proxy_port','batch_size','daily_budget','requests_per_minute','offline_batch_size','review_session_size','audio_volume','audio_repeat_gap_seconds','audio_pause_minutes'].forEach(k => result[k] = Number(form.elements[k].value));
   result.quiz_interval_mode = form.elements.quiz_interval_mode.value;
   result.quiz_interval_min = Number(form.elements[result.quiz_interval_mode === 'fixed' ? 'quiz_interval_fixed' : 'quiz_interval_min'].value);
   result.quiz_interval_max = result.quiz_interval_mode === 'fixed' ? result.quiz_interval_min : Number(form.elements.quiz_interval_max.value);
@@ -390,10 +395,24 @@ function applyDictionarySense() {
   if (sense.examples.length) {$('#dictionary-example').selectedIndex = 1;$('#word-form').elements.sentence.value = sense.examples[0];}
   dictionaryApplied = true;
 }
-async function saveWord(event) {
+function duplicateWords(words) {
+  return state.words.filter(existing=>existing.id!==editingId && words.some(item=>existing.word===item.word.normalize('NFKC').trim().replace(/\s+/g,' ').toLowerCase()));
+}
+function showDuplicates(words,bulk=false,saved=false) {
+  duplicateEntry={bulk,saved};
+  $('#duplicate-note').textContent=saved?'New words were saved. These spellings were already in your notebook; their details were kept.':'These spellings are already in your notebook. Their details have not changed. Opening an existing word replaces the current entry form so you can review and edit the saved version.';
+  $('#duplicate-list').innerHTML=words.map(w=>`<div class="duplicate-row"><strong>${escapeHtml(w.word)}</strong><button type="button" class="button secondary compact" data-edit-duplicate="${w.id}">Edit existing word</button></div>`).join('');
+  $('#duplicate-new-only').hidden=!bulk || saved;$('#duplicate-keep').textContent=saved?'Done':bulk?'Back to my entry':'Keep saved version';
+  $('#duplicate-dialog').showModal();
+}
+async function saveWord(event,allowDuplicates=false) {
   event.preventDefault();
   await guarded(async () => {
     const form = $('#word-form');
+    if(!allowDuplicates){
+      const entered=addMode==='bulk' && !editingId ? form.elements.bulk.value.split(/[\n,;]/).map(word=>({word})) : [{word:form.elements.word.value}];
+      const duplicates=duplicateWords(entered);if(duplicates.length){showDuplicates(duplicates,addMode==='bulk' && !editingId);return;}
+    }
     let result;
     const savedId = editingId;
     if (editingId) {
@@ -412,6 +431,7 @@ async function saveWord(event) {
     }
     $('#word-dialog').close();
     await refresh();
+    if(!savedId && result.duplicates?.length)showDuplicates(state.words.filter(w=>result.duplicates.includes(w.word)),addMode==='bulk',true);
     if (savedId && practice && !$('#practice-active').hidden && currentWord().id === savedId) {
       const updated = state.words.find(w=>w.id===savedId);
       const types = exerciseTypes(updated,practice.quizSettings || state.settings);
@@ -502,7 +522,7 @@ function reviewPool(ids, endless, settings) {
   const quizzes = candidates.filter(w => exerciseTypes(w,settings).includes('meaning'))
     .sort((a,b) => (b.meaning_priority ?? 0)-(a.meaning_priority ?? 0));
   const limit = endless ? 10 : ids ? candidates.length : (settings.review_session_size || Math.max(spelling.length,quizzes.length));
-  const words = spelling.slice(0,limit).map(w => spellingExercise(w,settings));
+  const words = spelling.slice(0,limit).map(w => spellingExercise(w,settings)).filter(Boolean);
   return {words,quizzes:quizzes.slice(0,limit)};
 }
 async function startReview(ids, endless = false, meaningOnly = false) {
@@ -521,7 +541,7 @@ async function startReview(ids, endless = false, meaningOnly = false) {
   try {
     await waitForSessionEnd();
     saved = await api('/practice-sessions','POST',{kind:endless ? 'endless' : ids ? 'selected' : 'normal',ids:ids || null,meaning_only:meaningOnly});
-    pool.words = saved.words.map(w=>spellingExercise(w,saved.settings));
+    pool.words = saved.words.map(w=>spellingExercise(w,saved.settings)).filter(Boolean);
   } finally {sessionStarting=false;}
   const session = TypewriterReview.create(meaningOnly ? [] : pool.words,pool.quizzes,saved.settings,Math.random,{endless});
   if (!session.queue.length) {
@@ -559,6 +579,7 @@ async function waitForSessionEnd() {
 }
 function spellingExercise(word, settings) {
   const types=exerciseTypes(word,settings).filter(t=>t!=='meaning');
+  if(!types.length)return null;
   return {...word,audio_eligible:audioEligible(word,settings),exercise:types[word.reviews % types.length],spellingRecorded:false};
 }
 function openPractice() {
@@ -591,7 +612,7 @@ function exerciseTypes(word, settings = state.settings) {
   const types = [];
   if (settings.sentence_enabled && word.clue) types.push('sentence');
   if (settings.definition_enabled && word.definition && !word.meaning_flagged) types.push('definition');
-  if (settings.audio_enabled && audioEligible(word,settings)) types.push('audio');
+  if (settings.audio_enabled && !audioOnlyPaused(settings) && audioEligible(word,settings)) types.push('audio');
   if (settings.meaning_enabled && word.definition && !word.meaning_flagged && (word.distractors.length === 3 || state.words.some(w => w.practice_ready!==false && w.definition && !w.meaning_flagged && w.definition.trim().toLowerCase() !== word.definition.trim().toLowerCase()))) types.push('meaning');
   return types;
 }
@@ -603,6 +624,11 @@ function makeMeaningChoices(word) {
   return shuffle([word,...shuffle(others).slice(0,3)]);
 }
 function renderPractice() {
+  if(practice.mode==='review' && currentWord().exercise==='audio' && !practice.correction && audioOnlyPaused(practice.quizSettings)){
+    const alternatives=exerciseTypes(currentWord(),practice.quizSettings);
+    if(!alternatives.length){finishPractice();toast('Audio-only is paused. Start a new session for other enabled exercises.');return;}
+    currentWord().exercise=alternatives[0];
+  }
   practice.questionRequest=crypto.randomUUID();
   currentWord().audio_eligible=audioEligible(currentWord(),practice.quizSettings || state.settings);
   stopPronunciation(false);
@@ -624,6 +650,9 @@ function renderPractice() {
   $('#practice-meaning-flag').hidden = !word.definition || !!word.meaning_flagged;
   $('#practice-sentence-flag').hidden = !word.sentence || !!word.sentence_flagged;
   $('#skip-audio').hidden = !audioOnly;
+  $('#pause-audio').hidden=!audioOnly;
+  $('#pause-audio').textContent=`Pause audio-only · ${(practice.quizSettings || state.settings).audio_pause_minutes || 10} min`;
+  $('#drill-autoplay-toggle').hidden=!drill;updateDrillAutoplay();
   $('#playback-status').textContent = '';
   $('#practice-feedback').innerHTML = '';
   delete $('#answer-form').dataset.result;
@@ -752,6 +781,7 @@ async function advancePractice() {
         const result=await api(`/practice-sessions/${session.serverId}/next`,'POST',{position:session.spellingsDone});
         if (!result.word) {session.pendingAdvance=false;finishPractice(true);return;}
         const chosen=spellingExercise(result.word,session.quizSettings);
+        if(!chosen){session.pendingAdvance=false;finishPractice();toast('No words remain for the available exercises. Your answers are saved.');return;}
         // Keep the displayed queue unique if coverage picks a different remaining word.
         const other=session.queue.findIndex((w,i)=>i>session.index && w.exercise!=='meaning' && w.id===chosen.id);
         if (other>=0) session.queue[other]=session.queue[session.index];
@@ -822,25 +852,50 @@ function pronunciationUrl(word, preview = false) {
 }
 function preparePronunciation(word) {
   const audio = $('#pronunciation');
-  // Preload only recordings already checked or supplied by the user, without sound.
-  if (!word.audio_flagged && (word.audio_eligible || word.audio_file)) {
+  const settings=practice?.quizSettings || state.settings;
+  const task=practice?.mode==='drill'?'drill':practice?.correction?'correction':word.exercise;
+  // Explicit autoplay also permits silent preloading for clue exercises.
+  if (!word.audio_flagged && (word.audio_eligible || word.audio_file || hasAudio(word,settings) && (settings.play_after_answer || settings['autoplay_'+task]))) {
     const url = pronunciationUrl(word);
     audio.preload = 'auto';
     if (audio.getAttribute('src') !== url) audio.src = url;
   } else if (audio.hasAttribute('src') && audio.getAttribute('src') !== pronunciationUrl(word)) {
     audio.removeAttribute('src');audio.load();
   }
+  const next=practice?.mode==='review'?practice.queue[practice.index+1]:null,preload=$('#pronunciation-next');
+  if(next && !audioOnlyPaused(settings) && audioEligible(next,settings) && next.id!==word.id){
+    const nextUrl=pronunciationUrl(next);preload.preload='auto';if(preload.getAttribute('src')!==nextUrl)preload.src=nextUrl;
+  }else if(preload.hasAttribute('src')){preload.removeAttribute('src');preload.load();}
 }
 function stopPronunciation(release = true) {
+  audioWaitCancel?.();
   audioSequence++;
   const audio = $('#pronunciation');
+  if(!audio.paused && !audio.ended && audio.getAttribute('src')===lastAudioUrl)lastAudioFinished=performance.now();
   audio.pause();
-  if (release) {audio.removeAttribute('src');audio.load();}
+  if (release) {audio.removeAttribute('src');audio.load();const next=$('#pronunciation-next');next.removeAttribute('src');next.load();}
+}
+function waitForAutomaticAudio(audio,delay){
+  return new Promise(resolve=>{
+    let timer;
+    const finish=ok=>{clearTimeout(timer);audio.removeEventListener('ended',ended);audio.removeEventListener('error',ended);if(audioWaitCancel===cancel)audioWaitCancel=null;resolve(ok);};
+    const cancel=()=>finish(false),ended=()=>finish(true);audioWaitCancel=cancel;
+    if(delay===null){audio.addEventListener('ended',ended,{once:true});audio.addEventListener('error',ended,{once:true});timer=setTimeout(()=>finish(false),20000);}
+    else timer=setTimeout(()=>finish(true),delay);
+  });
 }
 async function listen(automatic = false, afterAnswer = false) {
   if (!practice || $('#practice-active').hidden && !afterAnswer || currentWord().audio_flagged) return;
+  if(automatic && practice.mode==='drill' && practice.autoplayMuted)return;
+  audioWaitCancel?.();
   const sequence = ++audioSequence, audio = $('#pronunciation');
   const url = pronunciationUrl(currentWord());
+  if(automatic && url===lastAudioUrl){
+    if(!audio.paused && !audio.ended){$('#playback-status').textContent='Automatic replay queued after this recording.';if(!await waitForAutomaticAudio(audio,null))return;}
+    const delay=1000*((practice.quizSettings || state.settings).audio_repeat_gap_seconds ?? 1.2)-(performance.now()-lastAudioFinished);
+    if(delay>0){$('#playback-status').textContent='A short pause before the automatic replay…';if(!await waitForAutomaticAudio(audio,delay))return;}
+    if(sequence!==audioSequence)return;
+  }
   audio.pause();
   // Play directly from our own server. Blob URLs were blocked by media-src 'self'.
   // Starting play before awaiting also keeps it attached to the user's click.
@@ -848,17 +903,21 @@ async function listen(automatic = false, afterAnswer = false) {
   if (audio.getAttribute('src') !== url) audio.src = url;
   else audio.currentTime = 0;
   $('#playback-status').textContent = 'Loading pronunciation…';
-  try {await audio.play();if (sequence === audioSequence) $('#playback-status').textContent = 'Listening · Alt+P to replay';}
+  if(lastAudioUrl!==url)lastAudioFinished=-Infinity;lastAudioUrl=url;
+  let timeout;
+  try {await Promise.race([audio.play(),new Promise((_,reject)=>{timeout=setTimeout(()=>{const error=new Error('Playback timed out.');error.name='TimeoutError';reject(error);},20000);})]);if (sequence === audioSequence) $('#playback-status').textContent = 'Listening · Alt+P to replay';}
   catch (error) {
     if (sequence !== audioSequence || error.name === 'AbortError') return;
+    if(error.name==='TimeoutError'){audio.pause();TypewriterDiagnostics.report('playback-timeout');$('#playback-status').textContent='The recording took too long to load. Try Listen again, choose another voice, or pause audio-only exercises.';return;}
     $('#playback-status').textContent = 'Playback unavailable. Press Alt+P to try again, or skip this recording.';
     if (error.name === 'NotAllowedError') {$('#playback-status').textContent = 'Press Alt+P or Listen to allow playback. Your browser needs a playback gesture.';if (automatic) return;throw new Error('Press Listen to allow sound for Typewriter.');}
     // Recover the server's useful lookup/proxy error when a media request failed.
-    const response = await fetch(url);
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),5000);
+    let response;try{response=await fetch(url,{signal:controller.signal});}catch{throw new Error('Pronunciation is unavailable. Check your connection or choose another voice.');}finally{clearTimeout(timer);}
     if (sequence !== audioSequence) return;
     if (!response.ok) {const result = await response.json();const message = result.error || 'Pronunciation is unavailable.';$('#playback-status').textContent = message;throw new Error(message);}
     throw new Error('This pronunciation could not be played. Try another word or browser.');
-  }
+  }finally{clearTimeout(timeout);}
 }
 async function prepare(ids) {
   if (state.settings.preparation_method === 'offline') {openPreparation(ids);return;}
@@ -942,6 +1001,26 @@ async function skipAudio() {
   if (answerBusy) return;
   practice.correction = false;
   await advancePractice();
+}
+function audioOnlyPaused(settings={}) {
+  return (Date.parse(state?.audio_pause_until ?? settings.audio_pause_until ?? '') || 0)>Date.now();
+}
+function updateDrillAutoplay(){
+  if(!practice)return;
+  $('#drill-autoplay-toggle').textContent=practice.autoplayMuted?'Enable automatic audio for this drill':'Mute automatic audio for this drill';
+  $('#drill-autoplay-toggle').setAttribute('aria-pressed',String(!!practice.autoplayMuted));
+}
+async function pauseAudioExercises(resume=false){
+  if(answerBusy)return;
+  const result=await api('/practice/audio-pause','POST',{resume});state.audio_pause_until=result.until;
+  if(practice){practice.quizSettings.audio_pause_until=result.until;
+    if(!resume && practice.mode==='review' && currentWord().exercise==='audio' && !practice.feedback){
+      stopPronunciation();const alternatives=exerciseTypes(currentWord(),practice.quizSettings).filter(type=>type!=='audio');
+      if(alternatives.length){currentWord().exercise=alternatives[0];practice.correction=false;renderPractice();}
+      else{finishPractice();toast('Audio-only is paused. Start a new session for other enabled exercises.');}
+    }
+  }
+  await refresh();toast(resume?'Audio-only exercises resumed.':'Audio-only exercises paused. Your answers and review dates were kept.');
 }
 function renderWordMeaning() {
   const word = state.words.find(w => w.id === editingId);
@@ -1152,6 +1231,8 @@ const actions = {
   'restore-audio':() => changeWordAudio({flagged:false,verified:false}),
   'find-edit-voice':()=>TypewriterAudio.open(editingId),
   'find-practice-voice':()=>{stopPronunciation();return TypewriterAudio.open(currentWord().id);},
+  'pause-audio':()=>pauseAudioExercises(),
+  'resume-audio':()=>pauseAudioExercises(true),
   'remove-alternative-audio':async()=>{$('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();await api(`/words/${editingId}/pronunciation/alternative`,'DELETE');await refresh();renderWordAudio();},
   'remove-audio':removeUploadedAudio, 'flag-practice-audio':flagPracticeAudio,
   'skip-audio':skipAudio,
@@ -1271,7 +1352,7 @@ $('#date-label').textContent = new Date().toLocaleDateString(undefined,{weekday:
 guarded(async () => {await refresh();navigate(location.hash.slice(1) || 'today');});
 setInterval(async () => {
   if (!state || document.hidden) return;
-  try {const job = await api('/enrichment');if (job.busy !== state.enrichment.busy || job.done !== state.enrichment.done || job.pending !== state.enrichment.pending || job.message !== state.enrichment.message || job.status !== state.enrichment.status || job.id !== state.enrichment.id) {await refresh();}else {state.enrichment = job;renderQueue();renderKeys();}}catch { /* Keep the notebook usable during a temporary disconnect. */ }
+  try {const job = await api('/enrichment');if (job.audio_pause_until!==state.audio_pause_until || job.busy !== state.enrichment.busy || job.done !== state.enrichment.done || job.pending !== state.enrichment.pending || job.message !== state.enrichment.message || job.status !== state.enrichment.status || job.id !== state.enrichment.id) {await refresh();}else {state.enrichment = job;renderQueue();renderKeys();}}catch { /* Keep the notebook usable during a temporary disconnect. */ }
 },4000);
 
 window.addEventListener('pagehide',()=>{
@@ -1309,3 +1390,8 @@ $('#review-all-due').addEventListener('change',event=>{
 $('#review-session-size').addEventListener('input',updateReviewLimit);
 
 $('#activate-word').addEventListener('change',event=>{$('#word-submit').textContent=event.target.checked?'Save & add to practice':'Save preparation';});
+$('#duplicate-list').addEventListener('click',event=>guarded(async()=>{const button=event.target.closest('[data-edit-duplicate]');if(!button)return;const id=Number(button.dataset.editDuplicate);$('#duplicate-dialog').close();$('#word-dialog').close();await refresh();if(state.words.some(w=>w.id===id))openWord(id);else toast('This word was removed. Add it again if needed.',true);}));
+$('#duplicate-keep').onclick=()=>{if(!duplicateEntry.bulk && !duplicateEntry.saved)$('#word-dialog').close();$('#duplicate-dialog').close();};
+$('#duplicate-new-only').onclick=()=>{$('#duplicate-dialog').close();saveWord({preventDefault(){}},true);};
+$('#drill-autoplay-toggle').onclick=()=>{if(practice?.mode!=='drill')return;practice.autoplayMuted=!practice.autoplayMuted;if(practice.autoplayMuted)stopPronunciation();$('#playback-status').textContent=practice.autoplayMuted?'Automatic audio is muted for this drill. Listen or Alt+P still plays the word.':'Automatic audio enabled for this drill.';updateDrillAutoplay();};
+$('#pronunciation').addEventListener('ended',()=>{lastAudioFinished=performance.now();});
