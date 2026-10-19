@@ -37,7 +37,7 @@ const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">$
 function hydrateIcons(root = document) { $$('[data-icon]', root).forEach(el => el.innerHTML = icon(el.dataset.icon)); }
 let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer, audioSequence = 0, answerBusy = false, drillMatches = [], drillHighlight = 0, preparedPreviewText = null;
 let pendingFailure = null, focusedModal = null, duplicateEntry = null;
-let audioWaitCancel=null,lastAudioUrl='',lastAudioFinished=-Infinity;
+let lastAudioUrl='',lastAudioRequested=-Infinity;
 document.addEventListener('focusin',event=>{
   const modal = event.target.closest('dialog[open]');
   if (modal) focusedModal = modal;
@@ -868,34 +868,20 @@ function preparePronunciation(word) {
   }else if(preload.hasAttribute('src')){preload.removeAttribute('src');preload.load();}
 }
 function stopPronunciation(release = true) {
-  audioWaitCancel?.();
   audioSequence++;
   const audio = $('#pronunciation');
-  if(!audio.paused && !audio.ended && audio.getAttribute('src')===lastAudioUrl)lastAudioFinished=performance.now();
   audio.pause();
   if (release) {audio.removeAttribute('src');audio.load();const next=$('#pronunciation-next');next.removeAttribute('src');next.load();}
-}
-function waitForAutomaticAudio(audio,delay){
-  return new Promise(resolve=>{
-    let timer;
-    const finish=ok=>{clearTimeout(timer);audio.removeEventListener('ended',ended);audio.removeEventListener('error',ended);if(audioWaitCancel===cancel)audioWaitCancel=null;resolve(ok);};
-    const cancel=()=>finish(false),ended=()=>finish(true);audioWaitCancel=cancel;
-    if(delay===null){audio.addEventListener('ended',ended,{once:true});audio.addEventListener('error',ended,{once:true});timer=setTimeout(()=>finish(false),20000);}
-    else timer=setTimeout(()=>finish(true),delay);
-  });
 }
 async function listen(automatic = false, afterAnswer = false) {
   if (!practice || $('#practice-active').hidden && !afterAnswer || currentWord().audio_flagged) return;
   if(automatic && practice.mode==='drill' && practice.autoplayMuted)return;
-  audioWaitCancel?.();
-  const sequence = ++audioSequence, audio = $('#pronunciation');
-  const url = pronunciationUrl(currentWord());
-  if(automatic && url===lastAudioUrl){
-    if(!audio.paused && !audio.ended){$('#playback-status').textContent='Automatic replay queued after this recording.';if(!await waitForAutomaticAudio(audio,null))return;}
-    const delay=1000*((practice.quizSettings || state.settings).audio_repeat_gap_seconds ?? 1.2)-(performance.now()-lastAudioFinished);
-    if(delay>0){$('#playback-status').textContent='A short pause before the automatic replay…';if(!await waitForAutomaticAudio(audio,delay))return;}
-    if(sequence!==audioSequence)return;
-  }
+  const audio = $('#pronunciation'),url = pronunciationUrl(currentWord());
+  const now=performance.now(),cooldown=1000*((practice.quizSettings || state.settings).audio_repeat_gap_seconds ?? 1.2);
+  // Drop duplicate requests before touching playback or its pending promise. Never queue them.
+  if(url===lastAudioUrl && now-lastAudioRequested<cooldown)return;
+  const sequence=++audioSequence;
+  lastAudioUrl=url;lastAudioRequested=now;
   audio.pause();
   // Play directly from our own server. Blob URLs were blocked by media-src 'self'.
   // Starting play before awaiting also keeps it attached to the user's click.
@@ -903,11 +889,12 @@ async function listen(automatic = false, afterAnswer = false) {
   if (audio.getAttribute('src') !== url) audio.src = url;
   else audio.currentTime = 0;
   $('#playback-status').textContent = 'Loading pronunciation…';
-  if(lastAudioUrl!==url)lastAudioFinished=-Infinity;lastAudioUrl=url;
   let timeout;
   try {await Promise.race([audio.play(),new Promise((_,reject)=>{timeout=setTimeout(()=>{const error=new Error('Playback timed out.');error.name='TimeoutError';reject(error);},20000);})]);if (sequence === audioSequence) $('#playback-status').textContent = 'Listening · Alt+P to replay';}
   catch (error) {
-    if (sequence !== audioSequence || error.name === 'AbortError') return;
+    if (sequence !== audioSequence) return;
+    lastAudioRequested=-Infinity; // A blocked or failed play must allow an immediate explicit retry.
+    if(error.name === 'AbortError')return;
     if(error.name==='TimeoutError'){audio.pause();TypewriterDiagnostics.report('playback-timeout');$('#playback-status').textContent='The recording took too long to load. Try Listen again, choose another voice, or pause audio-only exercises.';return;}
     $('#playback-status').textContent = 'Playback unavailable. Press Alt+P to try again, or skip this recording.';
     if (error.name === 'NotAllowedError') {$('#playback-status').textContent = 'Press Alt+P or Listen to allow playback. Your browser needs a playback gesture.';if (automatic) return;throw new Error('Press Listen to allow sound for Typewriter.');}
@@ -1394,4 +1381,3 @@ $('#duplicate-list').addEventListener('click',event=>guarded(async()=>{const but
 $('#duplicate-keep').onclick=()=>{if(!duplicateEntry.bulk && !duplicateEntry.saved)$('#word-dialog').close();$('#duplicate-dialog').close();};
 $('#duplicate-new-only').onclick=()=>{$('#duplicate-dialog').close();saveWord({preventDefault(){}},true);};
 $('#drill-autoplay-toggle').onclick=()=>{if(practice?.mode!=='drill')return;practice.autoplayMuted=!practice.autoplayMuted;if(practice.autoplayMuted)stopPronunciation();$('#playback-status').textContent=practice.autoplayMuted?'Automatic audio is muted for this drill. Listen or Alt+P still plays the word.':'Automatic audio enabled for this drill.';updateDrillAutoplay();};
-$('#pronunciation').addEventListener('ended',()=>{lastAudioFinished=performance.now();});

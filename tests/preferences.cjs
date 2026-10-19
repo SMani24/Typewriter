@@ -78,7 +78,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     async function configure(task,autoplay) {
       const settings=Object.fromEntries(tasks.map(t=>['autoplay_'+t,false]));
       settings['autoplay_'+task]=autoplay;
-      Object.assign(settings,{sentence_enabled:false,definition_enabled:false,audio_enabled:false,meaning_enabled:false});
+      Object.assign(settings,{audio_repeat_gap_seconds:0,sentence_enabled:false,definition_enabled:false,audio_enabled:false,meaning_enabled:false});
       settings[(task==='drill'||task==='correction'?'sentence':task)+'_enabled']=true;
       await api('/settings','PUT',settings);
       await page.reload();await page.waitForSelector('#app-content:not([hidden])');

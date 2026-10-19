@@ -25,6 +25,7 @@ with wave.open(str(p/"audio"/"00000000000000000000000000000000.wav"),"wb") as a:
     a.setparams((1,2,16000,0,"NONE","not compressed"))
     a.writeframes(b"".join(struct.pack("<h",int(5000*math.sin(2*math.pi*440*i/16000))) for i in range(8000)))
 s.set_audio(ids[0],file="00000000000000000000000000000000.wav",verified=True)
+s.set_audio(ids[1],file="00000000000000000000000000000000.wav",verified=True)
 app.extensions["dictionary"].lookup=lambda word,**kwargs: {"audio":{"us":"https://dictionary.cambridge.org/color-us.mp3"} if word=="color" else {},"senses":[]}
 def no_network(*args,**kwargs):
     raise AssertionError("No provider requests allowed in browser checks")
@@ -79,15 +80,27 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     async function drill(){
       await page.locator('.nav-item[data-page="today"]').click();await page.locator('[data-action="choose-drill"]').click();await page.locator('#drill-search').fill('necessary');await page.locator('#drill-form button[type="submit"]').click();
     }
-    await api('/settings','PUT',{autoplay_drill:true,play_after_answer:true,audio_repeat_gap_seconds:0.35});await page.evaluate(()=>refresh());
+    await api('/settings','PUT',{autoplay_drill:true,play_after_answer:true,audio_repeat_gap_seconds:2});await page.evaluate(()=>refresh());
     await drill();await page.waitForFunction(()=>window.audioCalls===1);
+    await page.keyboard.press('Alt+p');assert.equal(await page.evaluate(()=>window.audioCalls),1,'A manual duplicate is dropped');
     await page.locator('#answer').fill('wrong');await page.keyboard.press('Enter');await page.locator('#answer-form[data-result="incorrect"]').waitFor();
-    await page.waitForFunction(()=>window.audioCalls===2);
-    const timing=await page.evaluate(()=>({start:window.audioTimes[1],end:window.audioEnds[0]}));assert(timing.end && timing.start-timing.end>=320,'Automatic repeat follows the end of the recording and configured gap');
-    await page.keyboard.press('Enter');await page.locator('#drill-autoplay-toggle').click();await page.waitForTimeout(850);assert.equal(await page.evaluate(()=>window.audioCalls),2,'Muting cancels a queued automatic replay');
-    await page.keyboard.press('Alt+p');await page.waitForFunction(()=>window.audioCalls===3);
-    await page.locator('#answer').fill('necessary');await page.keyboard.press('Enter');await page.locator('#answer-form[data-result="correct"]').waitFor();await page.waitForTimeout(850);assert.equal(await page.evaluate(()=>window.audioCalls),3,'Drill mute includes answer-feedback audio');await end();
-    await drill();await page.waitForFunction(()=>window.audioCalls===4);assert.equal(await page.locator('#drill-autoplay-toggle').getAttribute('aria-pressed'),'false');await end();
+    assert.equal(await page.evaluate(()=>window.audioCalls),1,'An automatic answer replay in the cooldown is dropped');
+    await page.keyboard.press('Enter');await page.locator('#drill-autoplay-toggle').click();
+    await page.waitForTimeout(2200);assert.equal(await page.evaluate(()=>window.audioCalls),1,'Dropped requests never play later');
+    await page.keyboard.press('Alt+p');await page.waitForFunction(()=>window.audioCalls===2);
+    await page.locator('#answer').fill('necessary');await page.keyboard.press('Enter');await page.locator('#answer-form[data-result="correct"]').waitFor();await page.waitForTimeout(2200);assert.equal(await page.evaluate(()=>window.audioCalls),2,'Drill mute includes answer-feedback audio');await end();
+    await drill();await page.waitForFunction(()=>window.audioCalls===3);assert.equal(await page.locator('#drill-autoplay-toggle').getAttribute('aria-pressed'),'false');await end();
+    // A different word bypasses the cooldown, and a rejected play can be retried immediately.
+    await page.evaluate(async()=>{
+      const original=HTMLMediaElement.prototype.play;
+      HTMLMediaElement.prototype.play=function(){if(this.id==='pronunciation' && window.rejectNextPlay){window.rejectNextPlay=false;return Promise.reject(new DOMException('Gesture required','NotAllowedError'));}return original.call(this);};
+      window.rejectNextPlay=true;
+      const word=state.words.find(w=>w.word==='missing');word.audio_flagged=false;
+      practice={mode:'drill',queue:[word],index:0,quizSettings:{...state.settings,audio_repeat_gap_seconds:10}};
+      document.querySelector('#practice-active').hidden=false;
+      await listen(true);await listen(true);
+    });
+    await page.waitForFunction(()=>window.audioCalls===4);await page.evaluate(()=>{stopPronunciation();practice=null;});
 
     await api('/settings','PUT',{sentence_enabled:false,definition_enabled:false,audio_enabled:true,meaning_enabled:false,autoplay_audio:false,play_after_answer:false,audio_pause_minutes:2});await page.evaluate(()=>refresh());
     const before=await api('/export');await review('necessary');await page.locator('#pause-audio').click();await page.locator('#practice-summary').waitFor({state:'visible'});
@@ -114,6 +127,6 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.evaluate(()=>TypewriterDiagnostics.report('error',{filename:location.origin+'/static/essay_words.js',lineno:41,colno:7,message:'private-canary-do-not-send'}));
     const payload=(await report).postDataJSON();assert.deepEqual(Object.keys(payload).sort(),['column','kind','line','source']);assert.equal((await recorded).status(),202);
     const diagnosticLog=await (await page.request.get(base+'/api/logs/export')).text();assert(diagnosticLog.includes('essay_words.js'));assert(!diagnosticLog.includes('private-canary-do-not-send'));
-    assert.deepEqual(errors,[]);console.log('Audio controls passed: repeat gaps after playback ends, cancellation and session-only drill mute, manual replay, temporary audio-only pause and resume, unchanged grades, fallback exercises, duplicate confirmation/editing/bulk additions, advanced settings and mobile layout.');
+    assert.deepEqual(errors,[]);console.log('Audio controls passed: dropped manual/automatic duplicate requests, immediate failure retry, session-only drill mute, manual replay, temporary audio-only pause and resume, unchanged grades, fallback exercises, duplicate confirmation/editing/bulk additions, advanced settings and mobile layout.');
   }finally{if(browser)await browser.close();server.kill('SIGTERM');await new Promise(resolve=>{if(server.exitCode!==null)resolve();else server.once('exit',resolve);});fs.rmSync(directory,{recursive:true,force:true});}
 })().catch(error=>{console.error(error);process.exitCode=1;});

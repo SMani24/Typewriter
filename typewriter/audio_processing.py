@@ -10,7 +10,7 @@ from collections import OrderedDict
 from pathlib import Path
 from threading import Lock,Semaphore
 
-VERSION='voice-loudness-v2'
+VERSION='voice-loudness-v3'
 
 
 class AudioProcessing:
@@ -50,22 +50,44 @@ class AudioProcessing:
                 measured=self.command(source,'aformat=channel_layouts=mono,loudnorm=I=-18:TP=-1.5:LRA=7:print_format=json',None)
                 blocks=re.findall(r'\{[^{}]*"input_i"[^{}]*\}',measured)
                 data=json.loads(blocks[-1]) if blocks else {}
-                fields=('input_i','input_tp','input_lra','input_thresh','target_offset')
-                if data and all(math.isfinite(float(data[field])) for field in fields):
-                    filters='aformat=channel_layouts=mono,loudnorm=I=-18:TP=-1.5:LRA=7:linear=true:'+':'.join(key+'='+data[field] for key,field in zip(('measured_I','measured_TP','measured_LRA','measured_thresh','offset'),fields))
+                # FFmpeg's dynamic loudnorm pass can attenuate short pronunciations
+                # instead of reaching its target, even with finite integrated statistics.
+                # Apply the measured gain directly; only peaks need a lookahead limiter.
+                integrated=float(data.get('input_i','-inf'))
+                peak=float(data.get('input_tp','-inf'))
+                if math.isfinite(integrated):
+                    gain=-18-integrated
                 else:
-                    # Very short syllables and silence may not have an integrated LUFS value.
-                    measured=self.command(source,'aformat=channel_layouts=mono,volumedetect',None)
-                    mean=re.search(r'mean_volume:\s*(-?[\d.]+) dB',measured);peak=re.search(r'max_volume:\s*(-?[\d.]+) dB',measured)
-                    gain=min(-18-float(mean[1]),-1.5-float(peak[1]),30) if mean and peak else 0
-                    filters=f'aformat=channel_layouts=mono,volume={gain:.3f}dB'
-                # Trim only near-silence after level adjustment, preserving a short natural lead-in.
-                # Silent clips are left intact rather than producing a header-only MP3.
-                if math.isfinite(float(data.get('input_tp','-inf'))) and float(data['input_tp'])>-70:
-                    filters+=',silenceremove=start_periods=1:start_duration=0.03:start_threshold=-60dB:start_silence=0.04'
+                    # Below the 400 ms R128 window, use the same short-term window
+                    # repeatedly for measurement only. The playback is never repeated.
+                    repeated=self.command(source,'aformat=channel_layouts=mono,aresample=48000,aloop=loop=9:size=19200,loudnorm=I=-18:TP=-1.5:LRA=7:print_format=json',None)
+                    blocks=re.findall(r'\{[^{}]*"input_i"[^{}]*\}',repeated)
+                    short=json.loads(blocks[-1]) if blocks else {}
+                    level=float(short.get('input_i','-inf'))
+                    gain=-18-level if math.isfinite(level) else 0
+                gain=max(-60,min(60,gain))
+                limited=math.isfinite(peak) and peak+gain>-2
+                tail=''
+                if limited:
+                    # No automatic makeup gain: it would undo the loudness target.
+                    tail+=',aresample=192000,alimiter=limit=0.794328:level=false:attack=1:release=20'
+                # Trim only near-silence after adjustment; silent clips stay playable.
+                if math.isfinite(peak) and peak>-70:
+                    tail+=',silenceremove=start_periods=1:start_duration=0.03:start_threshold=-60dB:start_silence=0.04'
                 directory.mkdir(parents=True,exist_ok=True)
                 with tempfile.NamedTemporaryFile(dir=directory,suffix='.mp3',delete=False) as output:temporary=Path(output.name)
-                self.command(source,filters,temporary)
+                for attempt in range(4):
+                    filters=f'aformat=channel_layouts=mono,volume={gain:.3f}dB'+tail
+                    self.command(source,filters,temporary)
+                    if not limited:break
+                    # A transient can make the limiter reduce the average level.
+                    # Check encoded playback, then adjust from the original, never
+                    # repeatedly re-encode a lossy derivative. Bound the work.
+                    report=self.command(temporary,'loudnorm=I=-18:TP=-1.5:LRA=7:print_format=json',None)
+                    blocks=re.findall(r'\{[^{}]*"input_i"[^{}]*\}',report)
+                    actual=float(json.loads(blocks[-1])['input_i']) if blocks else -math.inf
+                    if not math.isfinite(actual) or abs(-18-actual)<=0.5:break
+                    gain=max(-60,min(60,gain+(-18-actual)))
                 if temporary.stat().st_size<32:raise ValueError('Empty normalized audio.')
                 temporary.chmod(0o600);temporary.replace(destination)
                 return destination

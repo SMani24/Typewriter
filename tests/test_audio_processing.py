@@ -38,6 +38,32 @@ class AudioProcessingTests(unittest.TestCase):
             source=self.tone(str(amplitude),amplitude,0.15);result=self.audio.normalize(source)
             self.assertNotEqual(result,source);self.assertGreater(result.stat().st_size,32)
 
+    def test_short_speech_with_a_transient_reaches_the_loudness_target(self):
+        # A quiet vowel and brief louder consonant: dynamic loudnorm used to make
+        # this kind of subsecond clip even quieter despite valid input statistics.
+        source=Path(self.temp.name)/'speech-envelope.wav'
+        with wave.open(str(source),'wb') as output:
+            output.setparams((1,2,16000,0,'NONE','not compressed'))
+            frames=[]
+            for i in range(14400):
+                amplitude=18000 if 3200<=i<3280 else 1500
+                envelope=min(1,i/400,(14400-i)/400)
+                frames.append(struct.pack('<h',int(amplitude*envelope*math.sin(2*math.pi*440*i/16000))))
+            output.writeframes(b''.join(frames))
+        result=self.audio.normalize(source)
+        # ebur128 independently measures the encoded playback, not loudnorm's
+        # prediction of its own output. Its final integrated report is the oracle.
+        text=self.audio.command(result,'ebur128=peak=true',None)
+        integrated=float(re.findall(r'I:\s*(-?[\d.]+) LUFS',text)[-1])
+        peak=float(re.findall(r'Peak:\s*(-?[\d.]+) dBFS',text)[-1])
+        self.assertAlmostEqual(integrated,-18,delta=0.8)
+        self.assertLess(peak,-1)
+
+    def test_short_and_long_syllables_have_similar_active_levels(self):
+        sources=[self.tone('short',1000,0.15),self.tone('long',12000,1)]
+        levels=[self.volume(self.audio.normalize(source))[0] for source in sources]
+        self.assertLess(abs(levels[0]-levels[1]),1.5)
+
     def test_cache_and_parallel_requests_run_one_conversion(self):
         source=self.tone('source',5000)
         with patch.object(self.audio,'command',wraps=self.audio.command) as command:
