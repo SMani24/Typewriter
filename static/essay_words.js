@@ -21,7 +21,9 @@
     try {
       const saved=JSON.parse(localStorage.getItem(storageKey) || sessionStorage.getItem(storageKey));
       if(saved && Array.isArray(saved.rows) && saved.rows.length<=500 && saved.rows.every(r=>typeof r.original==='string' && typeof r.corrected==='string' && r.corrected.length<=80 && /^[a-f0-9]{32}$/.test(r.extraction_id) && Number.isInteger(r.id) && Number.isInteger(r.revision) && r.revision>=0)) {
-        rows=saved.rows.map(row=>({...row,handled:!!(row.handled || row.added)}));discarded=new Set(Array.isArray(saved.discarded)?saved.discarded.filter(w=>typeof w==='string').slice(-1000):[]);sourceHash=typeof saved.sourceHash==='string'?saved.sourceHash:'';
+        discarded=new Set(Array.isArray(saved.discarded)?saved.discarded.filter(w=>typeof w==='string').slice(-1000):[]);
+        for(const row of saved.rows)if(row.handled || row.added)discarded.add(key(row.original));
+        rows=saved.rows.filter(row=>!row.handled && !row.added);sourceHash=typeof saved.sourceHash==='string'?saved.sourceHash:'';
       }
     }catch { /* A malformed browser recovery record is ignored. */ }
   }
@@ -59,25 +61,26 @@
     for(const row of rows){row.current=found.has(key(row.original));if(row.current)row.count=found.get(key(row.original)).count;}
     for(const item of result.words){if(discarded.has(key(item.original)) || rows.some(row=>key(row.original)===key(item.original)))continue;fresh.push({...item,corrected:'',revision:0,note:'',current:true,handled:false});}
     const admitted=fresh.slice(0,Math.max(0,500-rows.length));rows=[...admitted,...rows];sourceHash=await digest(text);remember();
-    q('#essay-words-source-note').textContent='New flags appear first. Earlier flags and your corrections stay until you discard them. Your essay is unchanged.';
-    message(admitted.length<fresh.length?'This list has reached 500 flags. Discard completed flags to make room; your earlier words have been kept.':result.limited?'Showing up to 500 unique flags.':admitted.length?`${admitted.length} new flags added above your earlier words.`:'No new flags. Your earlier review list is kept.');
+    q('#essay-words-source-note').textContent='New flags appear first. Earlier flags and your corrections stay until you queue or discard them. Your essay is unchanged.';
+    message(admitted.length<fresh.length?'This list has reached 500 flags. Queue or discard flags to make room; your earlier words have been kept.':result.limited?'Showing up to 500 unique flags.':admitted.length?`${admitted.length} new flags added above your earlier words.`:'No new flags. Your earlier review list is kept.');
   }
   let opening=false;
   async function open(){if(opening || q('#essay-words-dialog').open)return;opening=true;try{await restore();q('#essay-words-size').value=state.settings.offline_batch_size || 20;q('#essay-words-dialog').showModal();render();await run(extract);}finally{opening=false;}}
   function add(items){
     intakeItems=items.filter(row=>!row.handled && normalize(row.corrected));if(!intakeItems.length)throw new Error('Check at least one intended spelling first.');
-    q('#essay-intake-count').textContent=`${new Set(intakeItems.map(row=>normalize(row.corrected))).size} words. New words will be saved outside practice until prepared. Existing practice words will be marked for review; unfinished words keep their preparation queue.`;
+    q('#essay-intake-count').textContent=`${new Set(intakeItems.map(row=>normalize(row.corrected))).size} ${intakeItems.length===1?'word':'words'} ready for the next step. New words stay outside practice until prepared.`;
     q('#essay-intake-dialog').showModal();
   }
   async function confirmIntake(){
+    const submitted=intakeItems;
     const choice=q('input[name="essay-intake-mode"]:checked').value;
     const mode=choice==='llm' && q('#essay-intake-auto-voice').checked?'llm_auto':choice;
-    const result=await api('/essay/words/intake','POST',{mode,words:intakeItems.map(row=>({extraction_id:row.extraction_id,id:row.id,word:normalize(row.corrected)}))});
-    for(const row of intakeItems){
-      const prior=state.words.find(word=>word.word===normalize(row.corrected));row.handled=true;row.revision++;
-      row.actionStatus=prior?.preparation_queue ? `Already in the ${prior.preparation_queue==='manual'?'manual':'LLM'} preparation queue.` : prior ? result.marked.includes(prior.id)?'Essay mistake recorded · available for review.':'Already in your notebook.' : mode==='manual'?'In the manual preparation queue.':'In the LLM preparation queue.';
-    }
-    q('#essay-intake-dialog').close();intakeItems=[];remember();await refresh();message(`${result.added.length} words queued · ${result.marked.length} words marked for another review. Review scores were kept.`);render();
+    const result=await api('/essay/words/intake','POST',{mode,words:submitted.map(row=>({extraction_id:row.extraction_id,id:row.id,word:normalize(row.corrected)}))});
+    // Keep tombstones so extraction and older LLM replies cannot resurrect queued flags.
+    const completed=new Set(submitted);
+    for(const row of completed)discarded.add(key(row.original));
+    rows=rows.filter(row=>!completed.has(row));
+    remember();render();await refresh();if(intakeItems===submitted){q('#essay-intake-dialog').close();intakeItems=[];}message(`${result.added.length} words queued · ${result.marked.length} words marked for another review. Review scores were kept.`);render();
   }
   async function exportPrompts() {
     const size=Number(q('#essay-words-size').value);
@@ -126,6 +129,7 @@
   q('#essay-words-preview').addEventListener('click',()=>run(previewReply));
   q('#essay-words-use').addEventListener('click',useSuggestions);
   q('#essay-words-reply').addEventListener('input',invalidateReply);
+  document.querySelectorAll('input[name="essay-intake-mode"]').forEach(input=>input.addEventListener('change',()=>{q('#essay-intake-voice-option').hidden=q('input[name="essay-intake-mode"]:checked').value!=='llm';}));
   q('#essay-intake-confirm').addEventListener('click',()=>guarded(confirmIntake,q('#essay-intake-confirm')));
   q('#essay-words-list').addEventListener('input',event=>{
     if(event.target.dataset.correction===undefined)return;

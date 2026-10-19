@@ -1,21 +1,49 @@
 /* Plain-text list continuation and indentation; no HTML is inserted into drafts. */
 (function(root){
   'use strict';
+  const prefixOf=line=>line.match(/^([ \t]*)(?:(\d+|[a-zA-Z])([.)])|([-+*]))(?:[ \t]+|$)/);
+  const width=indent=>indent.replaceAll('\t','    ').length;
+  function nextMarker(prefix){
+    if(prefix[4])return prefix[4];
+    const item=prefix[2];
+    return (/^\d+$/.test(item)?String(Number(item)+1).padStart(item.length,'0'):String.fromCharCode(item.charCodeAt(0)+1).replace('{','a').replace('[','A'))+prefix[3];
+  }
+  function parentBefore(value,lineStart,indent){
+    const lines=value.slice(0,Math.max(0,lineStart-1)).split('\n');
+    for(let i=lines.length-1;i>=0;i--){
+      if(!lines[i].trim())continue;
+      const prefix=prefixOf(lines[i]);
+      if(width(lines[i].match(/^[ \t]*/)[0])<=indent)return prefix;
+    }
+    return null;
+  }
   function edit(value,start,end,key,shift=false){
     const lineStart=start===0?0:value.lastIndexOf('\n',start-1)+1;
     const lineEnd=value.indexOf('\n',start);const stop=lineEnd<0?value.length:lineEnd;
-    const line=value.slice(lineStart,stop),prefix=line.match(/^(\s*)(?:(\d+)([.)])|([-+*]))[ \t]+/);
+    const line=value.slice(lineStart,stop),prefix=prefixOf(line);
+    const replaceLine=text=>({value:value.slice(0,lineStart)+text+value.slice(stop),start:lineStart+text.length,end:lineStart+text.length});
     if(key==='Enter'){
       if(!prefix || start<lineStart+prefix[0].length)return null;
-      if(!line.slice(prefix[0].length).trim() && start===end){
-        return {value:value.slice(0,lineStart)+value.slice(stop),start:lineStart,end:lineStart};
-      }
-      const marker=prefix[2] ? String(Number(prefix[2])+1).padStart(prefix[2].length,'0')+prefix[3] : prefix[4];
-      const text='\n'+prefix[1]+marker+' ';
+      if(!shift && !line.slice(prefix[0].length).trim() && start===end)return replaceLine('');
+      const text='\n'+prefix[1]+(shift?'':nextMarker(prefix)+' ');
       return {value:value.slice(0,start)+text+value.slice(end),start:start+text.length,end:start+text.length};
     }
     if(key!=='Tab')return null;
-    if(!shift && start===end && !prefix){return {value:value.slice(0,start)+'    '+value.slice(end),start:start+4,end:start+4};}
+    if(start===end){
+      const indent=width(line.match(/^[ \t]*/)[0]);
+      if(!shift && (!line.trim() || prefix && !line.slice(prefix[0].length).trim())){
+        const parent=prefix || parentBefore(value,lineStart,indent);
+        if(parent){
+          const marker=parent[4]?'1.':/^\d+$/.test(parent[2])?'a.':'-';
+          return replaceLine(parent[1]+'    '+marker+' ');
+        }
+      }
+      if(shift && prefix && indent){
+        const parent=parentBefore(value,lineStart,Math.max(0,indent-4));
+        if(parent)return replaceLine(parent[1]+nextMarker(parent)+' '+line.slice(prefix[0].length));
+      }
+      if(!shift && !prefix)return {value:value.slice(0,start)+'    '+value.slice(end),start:start+4,end:start+4};
+    }
     const last=value.lastIndexOf('\n',end-1)+1;
     const blockEnd=end>start && end===last ? end-1 : (value.indexOf('\n',end)<0?value.length:value.indexOf('\n',end));
     const block=value.slice(lineStart,blockEnd);let delta=0,firstDelta=0;

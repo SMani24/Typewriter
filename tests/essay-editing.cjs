@@ -17,4 +17,16 @@ assert.equal(edit('one\ntwo',0,4,'Tab').value,'    one\ntwo');
 assert.equal(edit('\nstart',0,0,'Tab').value,'    \nstart');
 assert.equal(edit('🙂 item',2,2,'Tab').start,6);
 assert.equal(edit('plain',0,0,'Tab',true).value,'plain');
-console.log('Essay editing rules passed: numbered/bullet lists, empty-list exit, selection indentation, outdent, Unicode, and ordinary paragraphs.');
+function key(text,key,shift=false){return edit(text,text.length,text.length,key,shift).value;}
+assert.equal(key('1.','Enter',true),'1.\n');
+assert.equal(key('1.\n','Tab'),'1.\n    a. ');
+assert.equal(key('1.\n    a. some text','Enter'),'1.\n    a. some text\n    b. ');
+assert.equal(key('1.\n    a. some text\n    b. other text','Tab',true),'1.\n    a. some text\n2. other text');
+assert.equal(key('1.\n    a. some text\n    b. ','Tab',true),'1.\n    a. some text\n2. ');
+assert.equal(key('1.\n    a.','Enter',true),'1.\n    a.\n    ');
+assert.equal(key('1.\n    a.\n    ','Tab'),'1.\n    a.\n        - ');
+assert.equal(key('1.\n    a.\n        - text','Tab',true),'1.\n    a.\n    b. text');
+assert.equal(key('A) First','Enter'),'A) First\nB) ');
+assert.equal(key('A paragraph.\n','Tab'),'A paragraph.\n    ');
+assert.equal(key('1.','Enter'),'');
+console.log('Essay editing rules passed: nested numbered/lettered/bullet lists, soft breaks, empty-list exit, selection indentation, outdent, Unicode, and ordinary paragraphs.');

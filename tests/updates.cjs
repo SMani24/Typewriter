@@ -96,6 +96,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await page.waitForFunction(()=>document.querySelector('#pronunciation').currentTime>0);
     assert((await page.locator('#pronunciation').getAttribute('src')).includes('accent=us'));
     await page.waitForFunction(()=>document.querySelector('#pronunciation').ended);
+    await page.waitForFunction(()=>performance.now()-lastAudioRequested>=state.settings.audio_repeat_gap_seconds*1000);
     const loadedRequests=audioRequests;
     await page.locator('#answer').focus();
     await page.evaluate(()=>{window.replayStarted=false;document.querySelector('#pronunciation').addEventListener('playing',()=>window.replayStarted=true,{once:true});});

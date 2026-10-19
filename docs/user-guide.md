@@ -170,11 +170,12 @@ is trimmed from the playback copy; recordings can still need a first download th
 your proxy. A stalled load shows a retry message after 20 seconds rather than waiting
 indefinitely.
 
-**Advanced settings** contains the minimum gap for repeated automatic audio and the
-duration of an audio-only pause, along with API request budgets and pacing. Automatic
-replays wait for the recording to finish, then leave the saved gap (1.2 seconds by
-default). Manual **Listen / Alt+P** remains immediate. During a drill, **Mute automatic
-audio for this drill** turns off both opening and answer-feedback sound for that
+**Advanced settings** contains a repeat audio cooldown and the duration of an
+audio-only pause, along with API request budgets and pacing. Requests for the same
+recording within the cooldown (1.2 seconds from the previous play request by default)
+are ignored, whether automatic or **Listen / Alt+P**. Nothing plays later unless you
+request it again. Another word can play immediately, and failed playback allows an
+immediate retry. During a drill, **Mute automatic audio for this drill** turns off both opening and answer-feedback sound for that
 session; manual replay still works, and a new drill uses your saved preferences.
 
 In an audio-only question, **Pause audio-only** temporarily excludes those exercises
@@ -207,8 +208,10 @@ British and American spellings; names and uncommon words may still be flagged.
 This checks spelling rather than grammar or essay quality, and uses no API quota.
 
 Use **Review flagged words** to merge new possible misspellings above your existing
-review list, even when underlines are off. Earlier flags and your corrections stay.
-Discard unwanted flags with the × button, or accept a valid spelling in the personal
+review list, even when underlines are off. Earlier flags and your corrections stay
+until queued or discarded. Queued flags leave the list immediately and stay cleared
+when you reopen it or import older suggestions.
+Discard unwanted flags with the eraser button, or accept a valid spelling in the personal
 dictionary. You can also press **Ctrl+.** at a word in the editor. Personal spellings
 are saved locally and can be removed in Settings.
 
@@ -231,7 +234,11 @@ reply and use its suggestions in the list before queuing anything. Newer manual 
 are kept; valid spellings can be skipped. The essay text stays unchanged.
 
 Numbered and bulleted lists continue on Enter; Enter on an empty list item stops the
-list. **Tab** indents text/list items and **Shift+Tab** outdents. **Escape, then Tab**
+list. **Shift+Enter** keeps the current marker and starts a continuation line;
+**Tab** on that blank line starts an indented list (`1.` → `a.` → `-`).
+**Enter** continues that marker type. **Shift+Tab** returns an item to its parent
+list type and next number. **Tab** also indents text or selected lines, and
+**Shift+Tab** outdents. **Escape, then Tab**
 lets keyboard users move to the next control. Ordinary text editing and undo remain
 available. Extra space below the final line lets you scroll your writing away from
 the bottom edge. The editor does not insert formatted HTML.

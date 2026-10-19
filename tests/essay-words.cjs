@@ -65,21 +65,35 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
     await area.type('Second item');await area.press('Tab');assert.equal(await area.inputValue(),'1. First item\n    2. Second item');await area.press('Shift+Tab');assert.equal(await area.inputValue(),'1. First item\n2. Second item');
     await area.press('Control+z');assert.equal(await area.inputValue(),'1. First item\n    2. Second item');
     await area.fill('- First');await area.press('End');await area.press('Enter');assert.equal(await area.inputValue(),'- First\n- ');await area.press('Enter');assert.equal(await area.inputValue(),'- First\n');
+    await area.fill('1.');await area.press('End');await area.press('Shift+Enter');await area.press('Tab');await area.type('some text');await area.press('Enter');await area.type('some other text');assert.equal(await area.inputValue(),'1.\n    a. some text\n    b. some other text');await area.press('Shift+Tab');assert.equal(await area.inputValue(),'1.\n    a. some text\n2. some other text');await area.press('Control+z');assert.equal(await area.inputValue(),'1.\n    a. some text\n    b. some other text');
     const draft='A neccessary change. My CV lists the downsides of the enviroment.';
     await area.fill(draft);await page.locator('#essay-highlight').check();await page.waitForFunction(()=>document.querySelectorAll('#essay-highlight-content mark').length===2);
     await page.locator('#essay-words-open').click();await page.waitForFunction(()=>document.querySelectorAll('.essay-word-row').length===2);
     assert.equal(await page.locator('.essay-word-row input[type="checkbox"]').count(),0);
     const row=word=>page.locator('.essay-word-row').filter({has:page.locator('.essay-word-source strong',{hasText:word})});
+    // Export before intake, then replay that old LLM reply after the flags leave.
+    const essayToken=await page.locator('meta[name="typewriter-token"]').getAttribute('content');
+    const flags=await api('/essay/words','POST',{text:draft});
+    const promptResponse=await page.request.post(base+'/api/essay/words/prompts',{headers:{'X-Typewriter-Token':essayToken},data:{words:flags.words,size:20}});assert(promptResponse.ok());
+    const promptPath=path.join(directory,'old-flags.zip');fs.writeFileSync(promptPath,await promptResponse.body());
+    const oldReply=execFileSync(path.join(__dirname,'..','.venv','bin','python'),['-c',`import json,sys,zipfile
+with zipfile.ZipFile(sys.argv[1]) as z:
+ p=z.read(next(n for n in z.namelist() if n!='README.md')).decode()
+ d=json.loads(p.split(chr(96)*3+'json\\n')[1].split('\\n'+chr(96)*3)[0])
+ for w in d['words']:w.update(action='add',word={'neccessary':'necessary','enviroment':'environment'}[w['original']],reason='Checked spelling.')
+ print(json.dumps(d))`,promptPath],{encoding:'utf8'});
     await row('neccessary').locator('input').fill('necessary');await row('neccessary').locator('input').press('Enter');await page.waitForSelector('#essay-intake-dialog[open]');
-    assert.match(await page.locator('#essay-intake-dialog').textContent(),/outside practice/);await page.locator('#essay-intake-confirm').click();await page.waitForSelector('#essay-intake-dialog',{state:'hidden'});
+    assert.match(await page.locator('#essay-intake-dialog').textContent(),/outside practice/);await screenshot('essay-queue-desktop');await page.locator('#essay-intake-confirm').click();await page.waitForSelector('#essay-intake-dialog',{state:'hidden'});
+    assert.equal(await row('neccessary').count(),0,'Queued flags leave immediately');
     let notebook=(await api('/state')).words;assert.equal(notebook.find(w=>w.word==='necessary').essay_pending,true);assert.equal((await api('/export')).attempts.length,baseline);
     await page.locator('[data-close="essay-words-dialog"]').first().click();await area.fill(draft+' An accomodation.');await page.locator('#essay-words-open').click();
-    await page.waitForFunction(()=>document.querySelectorAll('.essay-word-row').length===3);
-    assert.equal(await page.locator('.essay-word-source strong').first().textContent(),'accomodation');assert(await row('neccessary').locator('input').isDisabled());
+    await page.waitForFunction(()=>document.querySelectorAll('.essay-word-row').length===2);
+    assert.equal(await page.locator('.essay-word-source strong').first().textContent(),'accomodation');assert.equal(await row('neccessary').count(),0,'Extraction does not resurrect queued flags');
     await row('enviroment').locator('input').fill('environment');await row('enviroment').locator('[data-add-row]').click();await page.locator('#essay-intake-confirm').click();await page.waitForSelector('#essay-intake-dialog',{state:'hidden'});
     notebook=(await api('/state')).words;assert.equal(notebook.find(w=>w.word==='environment').preparation_queue,'manual');assert.equal(notebook.find(w=>w.word==='environment').practice_ready,false);
     await row('accomodation').locator('input').fill('accommodation');await row('accomodation').locator('[data-add-row]').click();await page.locator('input[name="essay-intake-mode"][value="llm"]').check();await page.locator('#essay-intake-auto-voice').uncheck();await page.locator('#essay-intake-confirm').click();await page.waitForSelector('#essay-intake-dialog',{state:'hidden'});
     assert.equal((await api('/state')).words.find(w=>w.word==='accommodation').preparation_queue,'llm');
+    await page.locator('.essay-llm-review summary').click();await page.locator('#essay-words-reply').fill(oldReply);await page.locator('#essay-words-preview').click();await page.waitForFunction(()=>!document.querySelector('#essay-words-use').disabled);await page.locator('#essay-words-use').click();assert.equal(await page.locator('.essay-word-row').count(),0,'Older LLM suggestions cannot bring queued flags back');await page.locator('.essay-llm-review summary').click();
     const token=await page.locator('meta[name="typewriter-token"]').getAttribute('content');
     const replyFile=path.join(directory,'queued.zip');const response=await page.request.post(base+'/api/preparation/export',{headers:{'X-Typewriter-Token':token},data:{size:20}});assert(response.ok());fs.writeFileSync(replyFile,await response.body());
     const reply=execFileSync(path.join(__dirname,'..','.venv','bin','python'),['-c',`import json,sys,zipfile
@@ -98,7 +112,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     assert.equal(await page.locator('#personal-word').inputValue(),'AnkiAutomata');await page.locator('#save-personal-word').click();await page.waitForFunction(()=>document.querySelector('#personal-word-count').textContent.includes('1 saved'));
     await page.locator('[data-close="personal-dictionary-dialog"]').click();await page.waitForFunction(()=>document.querySelectorAll('#essay-highlight-content mark').length===1);
     await page.locator('#essay-words-open').click();await page.waitForSelector('#essay-words-dialog[open]');assert.equal(await row('AnkiAutomata').count(),0);
-    await page.locator('[data-close="essay-words-dialog"]').first().click();await area.fill('A definate mistake.');await page.locator('#essay-words-open').click();await page.waitForFunction(()=>document.querySelector('.essay-word-source strong').textContent==='definate');
+    await page.locator('[data-close="essay-words-dialog"]').first().click();await area.fill('A definate mistake.');await page.locator('#essay-words-open').click();await page.waitForFunction(()=>document.querySelector('.essay-word-source strong')?.textContent==='definate');
     await row('definate').locator('[data-discard-row]').click();assert.equal(await row('definate').count(),0);await page.locator('[data-close="essay-words-dialog"]').first().click();await page.locator('#essay-words-open').click();await page.waitForSelector('#essay-words-dialog[open]');assert.equal(await row('definate').count(),0);
     await page.locator('[data-close="essay-words-dialog"]').first().click();await page.locator('#essay-save').click();await page.waitForFunction(()=>document.querySelector('#essay-save-status').textContent==='Saved on this computer.');
     await page.reload();await page.waitForSelector('#app-content:not([hidden])');assert.equal((await api('/essay/dictionary')).words[0],'ankiautomata');
@@ -106,7 +120,21 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     await row('Zzprojectword').locator('[data-accept-row]').click();await page.locator('#personal-dictionary-dialog').waitFor({state:'visible'});await page.locator('#save-personal-word').click();
     await page.waitForFunction(()=>!Array.from(document.querySelectorAll('.essay-word-source strong')).some(el=>el.textContent==='Zzprojectword'));
     await page.locator('[data-close="personal-dictionary-dialog"]').click();await page.locator('[data-close="essay-words-dialog"]').first().click();
-    await page.setViewportSize({width:390,height:844});await page.locator('.nav-item[data-page="essay"]').click();await page.locator('#essay-words-open').click();await page.waitForSelector('#essay-words-dialog[open]');assert(await page.locator('#essay-words-dialog').evaluate(node=>node.scrollWidth<=node.clientWidth));await screenshot('essay-intake-mobile');
+    await page.locator('.nav-item[data-page="essay"]').click();await page.locator('#essay-words-open').click();await row('zzsecondword').locator('input').fill('second word');
+    assert.equal(await row('neccessary').count(),0,'Completed flags stay cleared after reload');
+    for(const width of [1360,700,630,390]){
+      await page.setViewportSize({width,height:1050});
+      await page.locator('#essay-words-dialog').evaluate(node=>Promise.all(node.getAnimations().map(animation=>animation.finished)));
+      const field=row('zzsecondword').locator('input');const before=await field.boundingBox();
+      await row('zzsecondword').locator('[data-add-row]').click();await page.locator('#essay-intake-dialog').waitFor({state:'visible'});
+      await page.locator('input[name="essay-intake-mode"][value="manual"]').check();assert(await page.locator('#essay-intake-voice-option').isHidden());
+      await page.locator('input[name="essay-intake-mode"][value="llm"]').check();assert(await page.locator('#essay-intake-voice-option').isVisible());
+      assert(await page.locator('#essay-intake-dialog').evaluate(node=>node.scrollWidth<=node.clientWidth));assert(await page.locator('.intake-option').evaluateAll(nodes=>nodes.every(node=>node.scrollWidth<=node.clientWidth)),'Choice card content fits');await screenshot('essay-queue-'+width);
+      await page.locator('[data-close="essay-intake-dialog"]').click();
+      const after=await field.boundingBox();assert.deepEqual(after,before,'Queue cancellation preserves correction geometry at '+width);
+      assert(await page.locator('#essay-words-list').evaluate(node=>node.scrollWidth<=node.clientWidth),'Flag list fits at '+width);
+    }
+    await screenshot('essay-flags-mobile');
     assert.deepEqual(errors,[]);console.log('Essay workflow passed: list continuation, Tab/outdent/undo, current flags merged first, persistent icon discard, manual/LLM queues, existing-word evidence, personal dictionary shortcut, protected writing, and mobile layout.');
   }finally{if(browser)await browser.close();server.kill('SIGTERM');await new Promise(resolve=>server.once('exit',resolve));fs.rmSync(directory,{recursive:true,force:true});}
 })().catch(error=>{console.error(error);process.exitCode=1;});
