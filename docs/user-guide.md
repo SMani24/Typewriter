@@ -170,6 +170,19 @@ is trimmed from the playback copy; recordings can still need a first download th
 your proxy. A stalled load shows a retry message after 20 seconds rather than waiting
 indefinitely.
 
+**Typing measurements** is an optional experiment, off by default. Turn on
+**Keep local typing summaries**, choose your usual input method if useful, save,
+and start a new review session. Eligible first spelling questions save aggregate
+timing, edit counts, and interruption flags with the submitted answer. Drills,
+corrections, hints, meaning quizzes, and abandoned questions are excluded. Reading
+and listening are handled separately; these are not confidence scores. Grades,
+review dates, and both scheduler choices stay the same.
+
+Summaries stay local and are included in notebook backups. No keystroke transcript
+or draft text is added. Turn the option off to stop collection, or choose **Delete
+saved typing summaries** to remove them and switch collection off. Existing backups
+are kept. See [the measurement design and limitations](typing-confidence.md).
+
 **Advanced settings** contains a repeat audio cooldown and the duration of an
 audio-only pause, along with API request budgets and pacing. Requests for the same
 recording within the cooldown (1.2 seconds from the previous play request by default)

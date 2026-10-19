@@ -70,7 +70,8 @@ Pronunciations come from several dictionary sources, or your own uploads. Compar
 voices in a list and choose one to keep. Automatic selections for the LLM queue are
 labelled and remain unchecked for audio-only exercises until you review them.
 Settings control playback volume, sound at the start of each exercise, and sound
-after an answer.
+after an answer. Optional local [typing measurements](docs/typing-confidence.md)
+can collect experimental timing summaries without changing grades or scheduling.
 
 ## Optional services and privacy
 
