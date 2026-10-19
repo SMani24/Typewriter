@@ -58,6 +58,12 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
         function assertResponse(response,result) {if(!response.ok) throw new Error(result.error);}
       },{url,method,data});
     }
+    assert(await page.evaluate(async()=>{
+      openWord(state.words.find(word=>word.word==='necessary').id);
+      const field=document.querySelector('#word-form').elements.definition;field.focus();
+      await new Promise(resolve=>setTimeout(resolve,80));return document.activeElement===field;
+    }),'Opening a word editor must not steal focus from a field the user has chosen');
+    await page.locator('[data-close="word-dialog"]').click();
     const baseline=(await api('/export')).attempts.length;
     assert(await page.evaluate(async()=>{const row=document.querySelector('#word-list .library-row');await refresh();return row===document.querySelector('#word-list .library-row');}),'Unchanged notebook rows survive a refresh');
     await page.locator('.nav-item[data-page="essay"]').click();const area=page.locator('#essay-body');await area.waitFor({state:'visible'});

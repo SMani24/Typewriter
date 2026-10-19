@@ -374,7 +374,7 @@ function openWord(id = null) {
   if (id) {const word = state.words.find(w => w.id === id);['word','definition','sentence','tip','tag'].forEach(k => form.elements[k].value = word[k]);$('#word-provenance').textContent = ['definition','sentence','tip'].filter(k => word[k]).map(k => ({definition:'Meaning',sentence:'Sentence',tip:'Tip'})[k] + ': ' + (word.sources[k] || 'manual')).join(' · ');}
   else $('#word-provenance').textContent = 'Automatic suggestions are labelled with their source. You can edit every field.';
   $('#word-dialog').showModal();
-  setTimeout(() => form.elements.word.focus(),30);
+  form.elements.word.focus({preventScroll:true});
 }
 async function lookupWord(button) {
   const word = $('#word-form').elements.word.value.trim();
