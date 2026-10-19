@@ -333,8 +333,8 @@ async function confirmScheduler() {
 }
 function settingsPayload() {
   const form = $('#settings-form'), result = {};
-  ['proxy_enabled','auto_ai','review_enabled','drill_enabled','sentence_enabled','definition_enabled','audio_enabled','meaning_enabled','autoplay_sentence','autoplay_definition','autoplay_audio','autoplay_meaning','autoplay_drill','autoplay_correction','play_after_answer','clear_proxy_password'].forEach(k => result[k] = form.elements[k].checked);
-  ['proxy_type','proxy_host','proxy_username','proxy_password','model','preparation_method','pronunciation_accent','text_size'].forEach(k => result[k] = form.elements[k].value.trim());
+  ['proxy_enabled','auto_ai','review_enabled','drill_enabled','sentence_enabled','definition_enabled','audio_enabled','meaning_enabled','autoplay_sentence','autoplay_definition','autoplay_audio','autoplay_meaning','autoplay_drill','autoplay_correction','play_after_answer','typing_metrics_enabled','clear_proxy_password'].forEach(k => result[k] = form.elements[k].checked);
+  ['proxy_type','proxy_host','proxy_username','proxy_password','model','preparation_method','pronunciation_accent','text_size','typing_input_method'].forEach(k => result[k] = form.elements[k].value.trim());
   ['proxy_port','batch_size','daily_budget','requests_per_minute','offline_batch_size','review_session_size','audio_volume','audio_repeat_gap_seconds','audio_pause_minutes'].forEach(k => result[k] = Number(form.elements[k].value));
   result.quiz_interval_mode = form.elements.quiz_interval_mode.value;
   result.quiz_interval_min = Number(form.elements[result.quiz_interval_mode === 'fixed' ? 'quiz_interval_fixed' : 'quiz_interval_min'].value);
@@ -346,9 +346,11 @@ async function saveSettings() {
   const requestedModel = $('#settings-form').elements.model.value.trim();
   state.settings = await api('/settings','PUT',settingsPayload());
   $('#model-note').textContent = requestedModel !== state.settings.model ? `Model name corrected to ${state.settings.model}.` : 'Availability is checked before generation. Refresh the list to see available models.';
+  if(!state.settings.typing_metrics_enabled)TypewriterTyping.discard();
   fillSettings();
 }
 function openWord(id = null) {
+  TypewriterTyping.discard();
   editingId = id;
   dictionaryData = null; dictionaryApplied = false; addMode = 'single';
   $('#word-form').reset();
@@ -624,6 +626,7 @@ function makeMeaningChoices(word) {
   return shuffle([word,...shuffle(others).slice(0,3)]);
 }
 function renderPractice() {
+  TypewriterTyping.discard();
   if(practice.mode==='review' && currentWord().exercise==='audio' && !practice.correction && audioOnlyPaused(practice.quizSettings)){
     const alternatives=exerciseTypes(currentWord(),practice.quizSettings);
     if(!alternatives.length){finishPractice();toast('Audio-only is paused. Start a new session for other enabled exercises.');return;}
@@ -666,6 +669,15 @@ function renderPractice() {
   }
   $('#answer-submit').hidden = meaning;
   $('#answer-submit').innerHTML = 'Check spelling' + icon('arrow');
+  practice.typingSnapshot=undefined;
+  if(state.settings.typing_metrics_enabled && practice.quizSettings?.typing_metrics_enabled && !drill){
+    practice.typingSeenWords ||= new Set();
+    const measuredBefore=practice.typingSeenWords.has(word.id);
+    if(practice.typingSeenWords.size<10000){
+      practice.typingSeenWords.add(word.id);
+      if(!meaning && !practice.correction && !measuredBefore && !word.spellingRecorded)TypewriterTyping.begin({audio:audioOnly});
+    }
+  }
   preparePronunciation(word);
   // A presentation starts sound only for the chosen task, with trusted audio.
   const audioTask = drill ? 'drill' : practice.correction ? 'correction' : word.exercise;
@@ -711,6 +723,7 @@ async function answerSubmit(event) {
   const answer = meaning ? String(practice.choice || '') : $('#answer').value;
   if (meaning && !practice.choice) {toast('Choose a meaning, or press a number key.');return;}
   if (!answer.trim()) {$('#answer').focus();return;}
+  if(practice.typingSnapshot===undefined)practice.typingSnapshot=TypewriterTyping.finish();
   answerBusy = true;
   const session = practice;let playFeedback=false;
   $('#answer-form').setAttribute('aria-busy','true');
@@ -722,7 +735,7 @@ async function answerSubmit(event) {
     const mode = practice.mode === 'drill' ? 'drill' : practice.correction ? 'correction' : meaning ? 'meaning' : 'review';
     let result;
     try {
-      result = await api(`/words/${word.id}/attempts`,'POST',{answer,mode,request_id:practice.questionRequest,session_id:practice.serverId,version:word.version,exercise:practice.mode === 'drill' ? 'drill' : word.exercise || 'unknown',session_kind:practice.mode === 'drill' ? 'drill' : practice.endless ? 'endless' : practice.scopeIds ? 'selected' : 'normal',hinted:practice.hinted || practice.correction,elapsed_ms:Math.min(86400000,Date.now()-practice.wordStarted)});
+      result = await api(`/words/${word.id}/attempts`,'POST',{answer,mode,request_id:practice.questionRequest,session_id:practice.serverId,version:word.version,exercise:practice.mode === 'drill' ? 'drill' : word.exercise || 'unknown',session_kind:practice.mode === 'drill' ? 'drill' : practice.endless ? 'endless' : practice.scopeIds ? 'selected' : 'normal',hinted:practice.hinted || practice.correction,elapsed_ms:Math.min(86400000,Date.now()-practice.wordStarted),...(state.settings.typing_metrics_enabled && practice.typingSnapshot?{typing:practice.typingSnapshot}:{})});
     } catch (error) {
       if (practice === session && $('#practice-dialog').open && !$('#practice-active').hidden) practiceFeedback('error','Couldn’t check this answer',`<p>${escapeHtml(error.message || 'Please try again.')}</p>`);
       throw error;
@@ -814,6 +827,7 @@ async function advancePractice() {
   }
 }
 function finishPractice(answerSaved = false) {
+  TypewriterTyping.discard();
   stopPronunciation();
   if (!practice) return;
   if (answerBusy && !answerSaved) {practice.endRequested = true;$('#playback-status').textContent = 'Finishing your current answer…';return;}
@@ -868,6 +882,7 @@ function preparePronunciation(word) {
   }else if(preload.hasAttribute('src')){preload.removeAttribute('src');preload.load();}
 }
 function stopPronunciation(release = true) {
+  TypewriterTyping.audioCancel();
   audioSequence++;
   const audio = $('#pronunciation');
   audio.pause();
@@ -888,11 +903,13 @@ async function listen(automatic = false, afterAnswer = false) {
   // Cambridge downloads still pass through the Python server's configured proxy.
   if (audio.getAttribute('src') !== url) audio.src = url;
   else audio.currentTime = 0;
+  TypewriterTyping.audioStart();
   $('#playback-status').textContent = 'Loading pronunciation…';
   let timeout;
   try {await Promise.race([audio.play(),new Promise((_,reject)=>{timeout=setTimeout(()=>{const error=new Error('Playback timed out.');error.name='TimeoutError';reject(error);},20000);})]);if (sequence === audioSequence) $('#playback-status').textContent = 'Listening · Alt+P to replay';}
   catch (error) {
     if (sequence !== audioSequence) return;
+    TypewriterTyping.audioCancel();
     lastAudioRequested=-Infinity; // A blocked or failed play must allow an immediate explicit retry.
     if(error.name === 'AbortError')return;
     if(error.name==='TimeoutError'){audio.pause();TypewriterDiagnostics.report('playback-timeout');$('#playback-status').textContent='The recording took too long to load. Try Listen again, choose another voice, or pause audio-only exercises.';return;}
@@ -1208,7 +1225,7 @@ const actions = {
   'review-complete-endless':()=>{$('#review-complete-dialog').close();return startReview(undefined,true);},
   'review-complete-quizzes':()=>{$('#review-complete-dialog').close();return startReview(undefined,false,true);},
   'edit-practice-word':()=>{if (!answerBusy && practice && !$('#practice-active').hidden) {stopPronunciation();openWord(currentWord().id);}},
-  hint:() => {if (!practice) return;practice.hinted = true;$('#practice-word').textContent = currentWord().word;$('#hint-button').hidden = true;$('#practice-label').textContent = 'LOOK, REMEMBER, THEN TYPE';$('#answer').focus();},
+  hint:() => {if (!practice) return;TypewriterTyping.discard();practice.hinted = true;$('#practice-word').textContent = currentWord().word;$('#hint-button').hidden = true;$('#practice-label').textContent = 'LOOK, REMEMBER, THEN TYPE';$('#answer').focus();},
   listen:() => listen(),
   'offline-preparation':() => openPreparation(),
   'download-prompts':downloadPrompts, 'preview-preparation':previewPreparation, 'apply-preparation':applyPreparation,
@@ -1217,7 +1234,7 @@ const actions = {
   'flag-edit-audio':() => changeWordAudio({flagged:true,verified:false}),
   'restore-audio':() => changeWordAudio({flagged:false,verified:false}),
   'find-edit-voice':()=>TypewriterAudio.open(editingId),
-  'find-practice-voice':()=>{stopPronunciation();return TypewriterAudio.open(currentWord().id);},
+  'find-practice-voice':()=>{TypewriterTyping.discard();stopPronunciation();return TypewriterAudio.open(currentWord().id);},
   'pause-audio':()=>pauseAudioExercises(),
   'resume-audio':()=>pauseAudioExercises(true),
   'remove-alternative-audio':async()=>{$('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();await api(`/words/${editingId}/pronunciation/alternative`,'DELETE');await refresh();renderWordAudio();},
@@ -1381,3 +1398,13 @@ $('#duplicate-list').addEventListener('click',event=>guarded(async()=>{const but
 $('#duplicate-keep').onclick=()=>{if(!duplicateEntry.bulk && !duplicateEntry.saved)$('#word-dialog').close();$('#duplicate-dialog').close();};
 $('#duplicate-new-only').onclick=()=>{$('#duplicate-dialog').close();saveWord({preventDefault(){}},true);};
 $('#drill-autoplay-toggle').onclick=()=>{if(practice?.mode!=='drill')return;practice.autoplayMuted=!practice.autoplayMuted;if(practice.autoplayMuted)stopPronunciation();$('#playback-status').textContent=practice.autoplayMuted?'Automatic audio is muted for this drill. Listen or Alt+P still plays the word.':'Automatic audio enabled for this drill.';updateDrillAutoplay();};
+
+$('#pronunciation').addEventListener('ended',()=>TypewriterTyping.audioEnd($('#pronunciation').duration*1000));
+$('#delete-typing-metrics').addEventListener('click',()=>guarded(async()=>{
+  TypewriterTyping.discard();
+  const result=await api('/typing-metrics','DELETE');await refresh();
+  $('#settings-form').elements.typing_metrics_enabled.checked=false;
+  const baseline=JSON.parse(settingsBaseline);baseline.typing_metrics_enabled=false;settingsBaseline=JSON.stringify(baseline);updateSettingsDirty();
+  if(practice)practice.typingSnapshot=null;
+  $('#typing-metrics-status').textContent=`Deleted ${result.deleted} summaries. Collection is off. Your words, answers, and schedules were kept.`;
+},$('#delete-typing-metrics')));

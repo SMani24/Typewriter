@@ -247,6 +247,10 @@ def create_app(data_dir=None, keys_path=None, background=True,diagnostics=None):
     def lookup():
         return jsonify(dictionary.lookup(body().get("word", "")))
 
+    @app.delete('/api/typing-metrics')
+    def delete_typing_metrics():
+        return jsonify(store.delete_typing_metrics())
+
     @app.post("/api/practice-sessions")
     def start_session():
         return jsonify(store.start_session(body()))

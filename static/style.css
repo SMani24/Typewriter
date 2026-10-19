@@ -209,3 +209,5 @@ dialog>.toast{position:sticky;bottom:0;left:auto;transform:none;width:auto;max-w
 .advanced-settings{grid-column:1 / -1}.advanced-settings>summary{cursor:pointer;font-family:var(--serif);font-size:calc(23px * var(--text-scale));color:var(--green)}
 .advanced-settings[open]>summary{margin-bottom:22px}.duplicate-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 0;border-bottom:1px solid var(--line)}
 .audio-pause-note{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:20px}.essay-row-actions .icon-button .icon{width:20px;height:20px}
+
+.typing-settings .checkbox-label{margin:16px 0 10px}.typing-settings>label:not(.checkbox-label){margin:18px 0}.typing-settings>#delete-typing-metrics{margin-top:12px}

@@ -12,6 +12,7 @@ from .audio_processing import VERSION as AUDIO_PROCESSING_VERSION
 from .audio_metadata import selected_audio as chosen_audio, save_selected, validate_record
 from .spelling import normalize_personal_word
 from .models import normalize_model
+from . import typing_metrics
 from .scheduling import SchedulingStore, card_for, save_card, engine, adapter, utc, Rating, CONFIG_ID
 
 DEFAULTS = {
@@ -28,6 +29,7 @@ DEFAULTS = {
     "autoplay_sentence": False, "autoplay_definition": False, "autoplay_audio": True,
     "play_after_answer": False, "autoplay_meaning": False, "autoplay_drill": False, "autoplay_correction": False,
     "audio_repeat_gap_seconds": 1.2, "audio_pause_minutes": 10,
+    "typing_metrics_enabled": False, "typing_input_method": "unknown",
 }
 
 
@@ -81,10 +83,11 @@ class Store(SchedulingStore):
                 if schema>3:
                     raise ValueError("This notebook needs a newer Typewriter version.")
                 needs_clue_flag=not source.execute("SELECT 1 FROM pragma_table_info('words') WHERE name='sentence_flagged'").fetchone()
-                if schema<3 or needs_clue_flag:
+                needs_typing=not source.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='attempt_typing'").fetchone()
+                if schema<3 or needs_clue_flag or needs_typing:
                     backups=self.path.parent/"backups"
                     backups.mkdir(exist_ok=True)
-                    destination=backups/(("before-scheduler-v2-" if schema<2 else "before-clue-flags-" if needs_clue_flag else "before-essay-intake-")+datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")+".db")
+                    destination=backups/(("before-scheduler-v2-" if schema<2 else "before-clue-flags-" if needs_clue_flag else "before-typing-metrics-" if needs_typing else "before-essay-intake-")+datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")+".db")
                     with sqlite3.connect(destination) as backup:
                         source.backup(backup)
                     destination.chmod(0o600)
@@ -106,6 +109,10 @@ class Store(SchedulingStore):
                     hinted INTEGER NOT NULL, elapsed_ms INTEGER NOT NULL, created TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS attempts_word ON attempts(word_id);
+                CREATE TABLE IF NOT EXISTS attempt_typing (
+                    attempt_id INTEGER PRIMARY KEY REFERENCES attempts(id) ON DELETE CASCADE,
+                    version INTEGER NOT NULL, summary TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS settings (name TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS key_usage (
                     key_id TEXT NOT NULL, day TEXT NOT NULL, requests INTEGER NOT NULL DEFAULT 0,
@@ -181,7 +188,7 @@ class Store(SchedulingStore):
                 if key == "proxy_password" and data[key] == "" and not data.get("clear_proxy_password"):
                     continue
                 values[key] = data[key]
-        for key in ["proxy_enabled", "auto_ai", "review_enabled", "drill_enabled", "sentence_enabled", "definition_enabled", "audio_enabled", "meaning_enabled", "autoplay_sentence", "autoplay_definition", "autoplay_audio", "autoplay_meaning", "autoplay_drill", "autoplay_correction", "play_after_answer"]:
+        for key in ["proxy_enabled", "auto_ai", "review_enabled", "drill_enabled", "sentence_enabled", "definition_enabled", "audio_enabled", "meaning_enabled", "autoplay_sentence", "autoplay_definition", "autoplay_audio", "autoplay_meaning", "autoplay_drill", "autoplay_correction", "play_after_answer", "typing_metrics_enabled"]:
             if not isinstance(values[key], bool):
                 raise ValueError("Choose an on/off setting.")
         if not values["review_enabled"] and not values["drill_enabled"]:
@@ -194,6 +201,8 @@ class Store(SchedulingStore):
             raise ValueError("Choose one of the four text sizes.")
         if values["pronunciation_accent"] not in ("uk", "us"):
             raise ValueError("Choose UK or US pronunciation.")
+        if not isinstance(values['typing_input_method'],str) or values['typing_input_method'] not in typing_metrics.METHODS:
+            raise ValueError('Choose a typing input method.')
         gap=values["audio_repeat_gap_seconds"]
         if type(gap) not in (float,int) or not math.isfinite(gap) or not 0<=gap<=10:
             raise ValueError("Audio repeat spacing must be between 0 and 10 seconds.")
@@ -528,6 +537,14 @@ class Store(SchedulingStore):
         db.execute("UPDATE words SET definition=?,sentence=?,tip=?,distractors=?,meaning_flagged=?,sentence_flagged=?,sources=?,updated=?,status=?,enrichment_error='',version=version+? WHERE id=?", (item["definition"], item["sentence"], item["tip"], item["distractors"], item["meaning_flagged"], item["sentence_flagged"], json.dumps(sources), now(), status, int(changed), item["id"]))
         return status == "ready" and not item["meaning_flagged"] and not item["sentence_flagged"]
 
+    def delete_typing_metrics(self):
+        with self.db() as db:
+            db.execute('BEGIN IMMEDIATE')
+            count=db.execute('SELECT COUNT(*) FROM attempt_typing').fetchone()[0]
+            db.execute('DELETE FROM attempt_typing')
+            db.execute("INSERT OR REPLACE INTO settings VALUES ('typing_metrics_enabled','false')")
+        return {'deleted':count}
+
     def delete_word(self, word_id):
         with self.db() as db:
             db.execute("DELETE FROM words WHERE id=?", (word_id,))
@@ -591,6 +608,7 @@ class Store(SchedulingStore):
             prior_spaced = db.execute("SELECT 1 FROM attempts WHERE word_id=? AND created>? AND spaced_recall=1 AND substr(created,1,10)=?", (word_id,row["recall_reset_at"],day)).fetchone()
             spaced = mode == "review" and not hinted and actually_due and known and not prior_spaced
             attempt_id = db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created,exercise,session_kind,scheduler,due_before,stage_before,spaced_recall,evidence_version) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (word_id, recorded_answer, int(correct), mode, int(hinted), elapsed, stamp,metadata["exercise"],metadata["session_kind"],selected,due.isoformat(),row["stage"],int(spaced),1)).lastrowid
+            typing_metrics.save(db,attempt_id,data,dict(row),metadata,self.settings())
             if mode == "review":
                 stage = row["stage"]
                 if correct and not hinted:
@@ -726,6 +744,9 @@ class Store(SchedulingStore):
         with self.db() as db:
             words = [dict(r) for r in db.execute("SELECT * FROM words")]
             attempts = [dict(r) for r in db.execute("SELECT * FROM attempts")]
+            summaries={r['attempt_id']:typing_metrics.validate(json.loads(r['summary']),imported=True) for r in db.execute('SELECT * FROM attempt_typing')}
+            for attempt in attempts:
+                if summaries.get(attempt['id']) is not None:attempt['typing']=summaries[attempt['id']]
             scheduling = self.export_scheduling(db,words)
             essay_slips=[dict(r) for r in db.execute("SELECT * FROM essay_slips")]
             for word in words:
@@ -858,6 +879,9 @@ class Store(SchedulingStore):
             for a in normalized_attempts:
                 if a["word_id"] in id_map:
                     imported = db.execute("INSERT INTO attempts (word_id,answer,correct,mode,hinted,elapsed_ms,created,exercise,session_kind,scheduler,due_before,stage_before,spaced_recall,evidence_version,legacy_advanced,fsrs_rating,scheduler_config) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (id_map[a["word_id"]], a["answer"], a["correct"], a["mode"], a["hinted"], a["elapsed_ms"], a["created"],a["exercise"],a["session_kind"],a["scheduler"],a["due_before"],a["stage_before"],a["spaced_recall"],a["evidence_version"],a["legacy_advanced"],a["fsrs_rating"],a["scheduler_config"]))
+                    summary=typing_metrics.validate(a.get('typing'),imported=True) if typing_metrics.eligible(a) else None
+                    if summary is not None:
+                        db.execute('INSERT INTO attempt_typing VALUES (?,?,?)',(imported.lastrowid,typing_metrics.VERSION,json.dumps(summary,separators=(',',':'))))
                     if "id" in a:
                         attempt_map[a["id"]] = imported.lastrowid
             self.restore_scheduling(db,scheduling,id_map,attempt_map,full)
