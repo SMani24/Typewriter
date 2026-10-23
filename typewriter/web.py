@@ -18,6 +18,7 @@ from .essay_intake import EssayIntake
 from .voice_preparation import VoicePreparation
 from .audio_processing import AudioProcessing
 from .diagnostics import Diagnostics
+from .ankiautomata import AnkiAutomata, AnkiAutomataError
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -40,8 +41,9 @@ def create_app(data_dir=None, keys_path=None, background=True,diagnostics=None):
     preparation = Preparation(store)
     essay_words = EssayWords(store)
     intake = EssayIntake(store)
+    ankiautomata = AnkiAutomata()
     token = secrets.token_urlsafe(32)
-    app.extensions.update(store=store, network=network, dictionary=dictionary, enrichment=enrichment, preparation=preparation, voice_preparation=voice_preparation,audio_processing=audio_processing)
+    app.extensions.update(store=store, network=network, dictionary=dictionary, enrichment=enrichment, preparation=preparation, voice_preparation=voice_preparation,audio_processing=audio_processing,ankiautomata=ankiautomata)
 
     @app.before_request
     def protect_local_app():
@@ -162,6 +164,22 @@ def create_app(data_dir=None, keys_path=None, background=True,diagnostics=None):
         if background:
             enrichment.auto_schedule()
         return jsonify(result), 201
+
+    @app.post("/api/integrations/ankiautomata/lookup")
+    def open_in_ankiautomata():
+        data = body()
+        if "word_id" in data:
+            if type(data["word_id"]) is not int or data["word_id"] <= 0 or "word" in data or "sentence" in data:
+                raise ValueError("Choose a saved word or send draft fields, not both.")
+            item = store.word(data["word_id"])
+            if not item:
+                raise KeyError("Word not found.")
+        else:
+            item = store.validate_word({"word": data.get("word"), "sentence": data.get("sentence", "")})
+        try:
+            return jsonify(ankiautomata.lookup(item["word"], item["sentence"]))
+        except AnkiAutomataError as error:
+            return jsonify(error=str(error)), error.status
 
     @app.patch("/api/words/<int:word_id>")
     def edit_word(word_id):
