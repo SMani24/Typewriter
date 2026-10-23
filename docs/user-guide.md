@@ -40,6 +40,47 @@ action stops a server it started; you can also run `python3 desktop/launch.py --
 Keep the project folder in place, or rerun the installer after moving it.
 Remove `~/.local/share/applications/typewriter.desktop` to remove the menu entry.
 
+## AnkiAutomata integration
+
+Open AnkiAutomata separately before sending a word. In Typewriter's word editor,
+choose **Open in AnkiAutomata** near the dictionary controls. This sends the
+**current word and sentence, including unsaved edits**, without saving them to
+Typewriter. The editor stays open. In **My words**, open a row's **More actions**
+menu and choose the same action to send that word's **saved** spelling and sentence.
+
+AnkiAutomata brings up a lookup for you to review. It does not add an Anki note
+until you confirm it there; Typewriter does not record an answer or change review
+history, clues, or due dates. A blank sentence clears any earlier sentence context
+in AnkiAutomata. Repeated clicks are disabled while a handoff is pending.
+
+If the connection fails, start AnkiAutomata from your application launcher or run
+`main.py` using its own Python environment, then retry. Typewriter keeps editor
+changes. A full lookup queue needs time to clear. If a reply times out, check the
+AnkiAutomata window before retrying because the lookup may already have arrived.
+The combined JSON must fit within 4,096 UTF-8 bytes, so a long non-ASCII sentence
+may need shortening even within the editor's character limit. Nothing is truncated.
+
+The handoff uses AnkiAutomata's local service at **127.0.0.1:24536**, checks its app
+identity and protocol capabilities, and bypasses both apps' internet proxies and
+shell proxy settings. It has no automatic startup or remote-server configuration.
+Browser requests stay on Typewriter's own origin; neither app's origin policy is
+relaxed. No notebook files, audio, API keys, or settings are shared by this action.
+
+The reverse **Send to Typewriter** action is available in AnkiAutomata's reviewed
+card draft. Its Typewriter address defaults to **http://127.0.0.1:8080**; change
+AnkiAutomata's `preferences.typewriter_url` if Typewriter uses another local port.
+Existing notebook words are reported as duplicates and kept unchanged, including
+clues and progress. New imports may need preparation and checked audio before they
+are suitable for all spelling exercises.
+
+Developers can check both directions against the sibling source using temporary
+notebooks and queues (no real Anki collection):
+
+```bash
+.venv/bin/python tests/ankiautomata_integration.py --ankiautomata-root ../AnkiAutomata
+.venv/bin/python ../AnkiAutomata/tests/typewriter_integration.py --typewriter-root .
+```
+
 ## Your notebook
 
 Choose Small, Default, Large, or Extra large in **Settings → Reading & appearance**.

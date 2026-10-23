@@ -31,11 +31,13 @@ const paths = {
   volume:'<path d="M11 4 6 8H3v8h3l5 4ZM15 8q4 4 0 8m3-11q7 7 0 14"/>',
   'book-add':'<path d="M3 4h7a3 3 0 0 1 3 3v14a4 4 0 0 0-4-2H3ZM13 7a3 3 0 0 1 3-3h5v15h-4M17 8v6m-3-3h6"/>',
   discard:'<path d="m4 7 6-3 9 9-6 7H8l-5-5ZM7 10l7 7M13 20h8"/>',
+  more:'<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
   trash:'<path d="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7"/>',
 };
 const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.book}</svg>`;
 function hydrateIcons(root = document) { $$('[data-icon]', root).forEach(el => el.innerHTML = icon(el.dataset.icon)); }
 let state, currentPage = 'today', wordFilter = 'all', selected = new Set(), editingId = null, addMode = 'single', dictionaryData = null, dictionaryApplied = false, practice = null, deletingId = null, toastTimer, audioSequence = 0, answerBusy = false, drillMatches = [], drillHighlight = 0, preparedPreviewText = null;
+let ankiAutomataBusy = false, wordEditorVersion = 0;
 let pendingFailure = null, focusedModal = null, duplicateEntry = null;
 let lastAudioUrl='',lastAudioRequested=-Infinity;
 document.addEventListener('focusin',event=>{
@@ -194,7 +196,7 @@ function visibleWords() {
 }
 function renderLibrary() {
   const words = visibleWords();
-  setMarkup($('#word-list'), words.length ? words.map(w => `<div class="library-row"><div class="library-word"><input type="checkbox" data-select="${w.id}" aria-label="Select ${escapeHtml(w.word)}" ${selected.has(w.id) ? 'checked' : ''}><div><strong>${escapeHtml(w.word)} ${badge(w)}</strong><p title="${escapeHtml(w.definition || w.enrichment_error || 'Waiting for preparation')}">${escapeHtml(w.definition || (w.enrichment_error ? 'Preparation paused — try again or edit' : 'Waiting for a meaning'))}${w.tag ? ` · ${escapeHtml(w.tag)}` : ''}</p></div></div><div class="recall" title="Lifetime unaided answers for this spelling, including extra practice">${w.accuracy === null ? '—' : w.accuracy + '%'}<small>${w.reviews ? w.reviews + ' reviews' : 'Not reviewed'}</small></div><div class="due-date">${w.practice_ready===false ? 'Needs preparing' : w.is_due ? '<strong>Ready today</strong>' : escapeHtml(new Date(w.due).toLocaleDateString(undefined,{month:'short',day:'numeric'}))}</div><div class="library-actions"><button class="icon-button" data-drill="${w.id}" aria-label="Drill ${escapeHtml(w.word)}" ${w.practice_ready===false?'disabled':''}>${icon('keyboard')}</button><button class="icon-button" data-edit="${w.id}" aria-label="Edit ${escapeHtml(w.word)}">${icon('edit')}</button></div></div>`).join('') : empty(state.words.length ? 'No words here just yet.' : 'Every notebook begins somewhere.', state.words.length ? 'Try a different search or filter.' : 'Add words from your essays, reading, or everyday life.', state.words.length ? '' : 'add', 'Add your first words'));
+  setMarkup($('#word-list'), words.length ? words.map(w => `<div class="library-row"><div class="library-word"><input type="checkbox" data-select="${w.id}" aria-label="Select ${escapeHtml(w.word)}" ${selected.has(w.id) ? 'checked' : ''}><div><strong>${escapeHtml(w.word)} ${badge(w)}</strong><p title="${escapeHtml(w.definition || w.enrichment_error || 'Waiting for preparation')}">${escapeHtml(w.definition || (w.enrichment_error ? 'Preparation paused — try again or edit' : 'Waiting for a meaning'))}${w.tag ? ` · ${escapeHtml(w.tag)}` : ''}</p></div></div><div class="recall" title="Lifetime unaided answers for this spelling, including extra practice">${w.accuracy === null ? '—' : w.accuracy + '%'}<small>${w.reviews ? w.reviews + ' reviews' : 'Not reviewed'}</small></div><div class="due-date">${w.practice_ready===false ? 'Needs preparing' : w.is_due ? '<strong>Ready today</strong>' : escapeHtml(new Date(w.due).toLocaleDateString(undefined,{month:'short',day:'numeric'}))}</div><div class="library-actions"><button class="icon-button" data-drill="${w.id}" aria-label="Drill ${escapeHtml(w.word)}" ${w.practice_ready===false?'disabled':''}>${icon('keyboard')}</button><button class="icon-button" data-edit="${w.id}" aria-label="Edit ${escapeHtml(w.word)}">${icon('edit')}</button><details class="word-actions-menu"><summary class="icon-button" aria-label="More actions for ${escapeHtml(w.word)}" title="More word actions">${icon('more')}</summary><div class="word-actions-popup"><button type="button" class="text-button" data-ankiautomata="${w.id}" ${ankiAutomataBusy ? 'disabled' : ''}>Open in AnkiAutomata</button></div></details></div></div>`).join('') : empty(state.words.length ? 'No words here just yet.' : 'Every notebook begins somewhere.', state.words.length ? 'Try a different search or filter.' : 'Add words from your essays, reading, or everyday life.', state.words.length ? '' : 'add', 'Add your first words'));
   $('#selection-bar').hidden = selected.size === 0;
   $('#selection-count').textContent = `${selected.size} word${selected.size === 1 ? '' : 's'} selected`;
   $('#select-all').checked = words.length > 0 && words.every(w => selected.has(w.id));
@@ -350,6 +352,9 @@ async function saveSettings() {
   fillSettings();
 }
 function openWord(id = null) {
+  wordEditorVersion++;
+  $('#ankiautomata-status').textContent = '';
+  $('[data-action="open-ankiautomata"]').disabled = ankiAutomataBusy;
   TypewriterTyping.discard();
   editingId = id;
   dictionaryData = null; dictionaryApplied = false; addMode = 'single';
@@ -377,6 +382,33 @@ function openWord(id = null) {
   else $('#word-provenance').textContent = 'Automatic suggestions are labelled with their source. You can edit every field.';
   $('#word-dialog').showModal();
   form.elements.word.focus({preventScroll:true});
+}
+function setAnkiAutomataBusy(busy) {
+  ankiAutomataBusy = busy;
+  $$('[data-ankiautomata], [data-action="open-ankiautomata"]').forEach(button => {
+    button.disabled = busy;
+    button.setAttribute('aria-busy', String(busy));
+  });
+}
+async function openInAnkiAutomata(wordId = null) {
+  if (ankiAutomataBusy) return;
+  const editor = wordId === null, version = wordEditorVersion;
+  const form = $('#word-form');
+  const payload = editor ? {word:form.elements.word.value, sentence:form.elements.sentence.value} : {word_id:wordId};
+  const status = message => {
+    if (editor && version === wordEditorVersion && $('#word-dialog').open) $('#ankiautomata-status').textContent = message;
+  };
+  setAnkiAutomataBusy(true);
+  status('Opening the current word and sentence in AnkiAutomata…');
+  TypewriterTyping.discard();
+  try {
+    const result = await api('/integrations/ankiautomata/lookup','POST',payload);
+    status(result.message);
+    toast(result.message);
+  } catch (error) {
+    status(error.message);
+    throw error;
+  } finally {setAnkiAutomataBusy(false);}
 }
 async function lookupWord(button) {
   const word = $('#word-form').elements.word.value.trim();
@@ -1217,7 +1249,7 @@ const actions = {
   'flag-practice-sentence':()=>{if(!answerBusy)return flagSentence(currentWord().id,true);},
   'flag-edit-meaning':() => flagMeaning(editingId,true), 'restore-meaning':() => flagMeaning(editingId,false),
   'review-selected':() => startReview([...selected]), 'review-selected-endless':() => startReview([...selected],true), 'clear-selection':() => {selected.clear();renderLibrary();},
-  lookup:lookupWord,
+  lookup:lookupWord, 'open-ankiautomata':() => openInAnkiAutomata(),
   'test-network':async () => {await saveSettings();$('#network-result').textContent = 'Testing…';try {const r = await api('/network/test','POST',{});$('#network-result').textContent = r.message;toast(r.message);} catch(error) {$('#network-result').textContent = 'Connection failed.';throw error;}},
   'save-keys':async () => {const result = await api('/keys','PUT',{keys:$('#api-keys').value});$('#api-keys').value = '';await refresh();toast(`${result.count} keys saved locally.`);},
   import:() => $('#import-file').click(),
@@ -1249,6 +1281,11 @@ document.addEventListener('click',event => {
   const page = event.target.closest('[data-page]');if (page) {navigate(page.dataset.page);return;}
   const close = event.target.closest('[data-close]');if (close) {if (close.dataset.close === 'word-dialog') {$('#audio-preview').pause();$('#audio-preview').removeAttribute('src');$('#audio-preview').load();}$('#'+close.dataset.close).close();return;}
   const edit = event.target.closest('[data-edit]');if (edit) {openWord(Number(edit.dataset.edit));return;}
+  const anki = event.target.closest('[data-ankiautomata]');
+  if (anki) {
+    if (!anki.disabled) {anki.closest('details').open = false;guarded(() => openInAnkiAutomata(Number(anki.dataset.ankiautomata)),anki);}
+    return;
+  }
   const drill = event.target.closest('[data-drill]');if (drill) {chooseDrill(Number(drill.dataset.drill));return;}
   const filter = event.target.closest('[data-filter]');if (filter) {wordFilter = filter.dataset.filter;$$('[data-filter]').forEach(b => b.classList.toggle('active',b===filter));renderLibrary();return;}
   const mode = event.target.closest('[data-add-mode]');if (mode) {addMode = mode.dataset.addMode;$('#single-fields').hidden = addMode !== 'single';$('#bulk-fields').hidden = addMode !== 'bulk';$$('[data-add-mode]').forEach(b => b.classList.toggle('active',b===mode));return;}

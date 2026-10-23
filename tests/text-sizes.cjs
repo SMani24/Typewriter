@@ -73,6 +73,7 @@ app.run(host="127.0.0.1",port=int(sys.argv[2]),debug=False,threaded=True)`;
         await page.locator('select[name="text_size"]').selectOption(size);
         assert(Math.abs(await page.locator('body').evaluate(b=>parseFloat(getComputedStyle(b).fontSize))-14*scale)<0.05);
         await page.locator('#settings-form button[type="submit"]').click();
+        await page.waitForFunction(()=>document.querySelector('#settings-unsaved-note').hidden && !document.querySelector('#settings-form button[type="submit"]').disabled);
         for(const name of ['today','words','essay','progress','settings']) {
           await page.locator('.nav-item[data-page="'+name+'"]').click();
           assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),size+' '+name+' at '+width);

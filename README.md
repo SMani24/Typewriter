@@ -91,6 +91,9 @@ The [user guide](docs/user-guide.md) covers preparation, backups, keyboard contr
 and troubleshooting. [Memory measurements](docs/memory-usage.md) describe the resource
 checks and their limits. Dictionary parsing began with ideas from
 [AnkiAutomata](https://github.com/SMani24/AnkiAutomata); Typewriter runs independently.
+With both apps open, **Open in AnkiAutomata** sends a word and sentence for card
+review. AnkiAutomata can send reviewed words back without overwriting duplicates.
+See the [integration guide](docs/user-guide.md#ankiautomata-integration) for details.
 
 ## Development checks
 
